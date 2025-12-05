@@ -123,25 +123,29 @@ class KeywordGenerator:
                 processing_time_seconds=time.time() - start_time,
             )
 
-        # Step 3: Deduplicate
-        all_keywords, dup_count = self._deduplicate(all_keywords)
-        logger.info(f"After dedup: {len(all_keywords)} keywords ({dup_count} removed)")
+        # Step 3: Fast deduplicate (exact + token signature)
+        all_keywords, dup_count = self._deduplicate_fast(all_keywords)
+        logger.info(f"After fast dedup: {len(all_keywords)} keywords ({dup_count} removed)")
 
         # Step 4: Score keywords
         all_keywords = await self._score_keywords(all_keywords, company_info)
         logger.info(f"Scored {len(all_keywords)} keywords")
 
-        # Step 5: Filter by score
+        # Step 5: AI semantic deduplication (removes "sign up X" vs "sign up for X" etc.)
+        all_keywords = await self._deduplicate_semantic(all_keywords)
+        logger.info(f"After AI semantic dedup: {len(all_keywords)} keywords")
+
+        # Step 6: Filter by score
         all_keywords = [kw for kw in all_keywords if kw.get("score", 0) >= config.min_score]
         logger.info(f"After score filter: {len(all_keywords)} keywords")
 
-        # Step 6: Cluster keywords
+        # Step 7: Cluster keywords
         if config.enable_clustering and len(all_keywords) > 0:
             all_keywords = await self._cluster_keywords(
                 all_keywords, company_info, config.cluster_count
             )
 
-        # Step 7: Limit to target count
+        # Step 8: Limit to target count
         all_keywords = all_keywords[: config.target_count]
 
         # Build result
@@ -362,8 +366,8 @@ Return JSON: {{"keywords": [{{"keyword": "...", "intent": "question|transactiona
             logger.error(f"Batch {batch_num} failed: {e}")
             raise
 
-    def _deduplicate(self, keywords: list[dict]) -> tuple[list[dict], int]:
-        """Remove exact and near-duplicate keywords using O(n) token signature grouping."""
+    def _deduplicate_fast(self, keywords: list[dict]) -> tuple[list[dict], int]:
+        """Fast O(n) deduplication: exact match + token signature grouping."""
         if not keywords:
             return [], 0
 
@@ -403,6 +407,83 @@ Return JSON: {{"keywords": [{{"keyword": "...", "intent": "question|transactiona
 
         duplicate_count = original_count - len(unique)
         return unique, duplicate_count
+
+    async def _deduplicate_semantic(self, keywords: list[dict]) -> list[dict]:
+        """
+        AI semantic deduplication using a single Gemini prompt.
+        Removes near-duplicates like "sign up X" vs "sign up for X".
+        Keeps the highest-scored keyword from each group.
+        """
+        if not keywords or len(keywords) < 2:
+            return keywords
+
+        # Sort by score descending (best first)
+        sorted_kws = sorted(keywords, key=lambda x: x.get("score", 0), reverse=True)
+
+        # Build simple list for the prompt
+        keyword_list = "\n".join(kw.get("keyword", "") for kw in sorted_kws)
+
+        prompt = f"""You have {len(sorted_kws)} keywords sorted by quality (best first).
+Remove DUPLICATES - keep only the first (best) one from each group of similar keywords.
+
+WHAT ARE DUPLICATES (remove the later one):
+- "sign up X" vs "sign up for X" → keep first
+- "review" vs "reviews" → keep first
+- "job search" vs "job hunting" vs "job searching" → keep first
+- "how to find X" vs "how find X" → keep first
+- Same words different order → keep first
+
+WHAT ARE NOT DUPLICATES (keep both):
+- Different locations: "jobs berlin" vs "jobs munich"
+- Different topics: "tech jobs" vs "startup jobs"
+- Different intents: "buy X" vs "what is X"
+
+Keywords (best quality first):
+{keyword_list}
+
+Return JSON with ONLY the unique keywords to keep:
+{{"keep": ["keyword1", "keyword2", "keyword3", ...]}}"""
+
+        try:
+            response = await asyncio.to_thread(
+                self.model.generate_content,
+                prompt,
+                generation_config=genai.GenerationConfig(
+                    temperature=0.2,
+                    response_mime_type="application/json",
+                ),
+            )
+
+            data = self._parse_json_response(response.text)
+            keep_list = data.get("keep", [])
+
+            if not keep_list:
+                logger.warning("AI dedup returned empty list, keeping original")
+                return keywords
+
+            # Build lookup set (case-insensitive, normalized)
+            keep_normalized = set()
+            for k in keep_list:
+                normalized = " ".join(str(k).lower().split())
+                keep_normalized.add(normalized)
+
+            # Filter to keep only keywords in the list
+            kept = []
+            for kw in sorted_kws:
+                kw_normalized = " ".join(kw.get("keyword", "").lower().split())
+                if kw_normalized in keep_normalized:
+                    kept.append(kw)
+                    keep_normalized.discard(kw_normalized)  # Avoid re-adding
+
+            removed = len(keywords) - len(kept)
+            if removed > 0:
+                logger.info(f"AI semantic dedup: removed {removed} near-duplicates")
+
+            return kept
+
+        except Exception as e:
+            logger.error(f"AI semantic dedup failed: {e}")
+            return keywords
 
     async def _score_keywords(
         self, keywords: list[dict], company_info: CompanyInfo
