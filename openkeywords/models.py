@@ -34,6 +34,18 @@ class GenerationConfig(BaseModel):
         default=False,
         description="Enable deep research (Reddit, Quora, forums) for hyper-niche keywords"
     )
+    enable_serp_analysis: bool = Field(
+        default=False,
+        description="Enable SERP analysis for AEO opportunity scoring (uses DataForSEO)"
+    )
+    serp_sample_size: int = Field(
+        default=15,
+        description="Number of top keywords to analyze for SERP features"
+    )
+    enable_volume_lookup: bool = Field(
+        default=False,
+        description="Get real search volumes from DataForSEO Keywords Data API"
+    )
 
 
 class Keyword(BaseModel):
@@ -53,6 +65,11 @@ class Keyword(BaseModel):
         default="ai_generated",
         description="Keyword source: ai_generated, gap_analysis, research_reddit, research_quora, research_niche"
     )
+    # AEO/SERP features
+    aeo_opportunity: int = Field(default=0, description="AEO opportunity score (0-100)")
+    has_featured_snippet: bool = Field(default=False, description="SERP has featured snippet")
+    has_paa: bool = Field(default=False, description="SERP has People Also Ask")
+    serp_analyzed: bool = Field(default=False, description="Whether SERP was analyzed")
 
 
 class Cluster(BaseModel):
@@ -98,7 +115,7 @@ class GenerationResult(BaseModel):
         with open(filepath, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(
-                ["keyword", "intent", "score", "cluster", "is_question", "volume", "difficulty", "source"]
+                ["keyword", "intent", "score", "cluster", "is_question", "volume", "difficulty", "source", "aeo_opportunity", "has_featured_snippet", "has_paa"]
             )
             for kw in self.keywords:
                 writer.writerow(
@@ -111,6 +128,9 @@ class GenerationResult(BaseModel):
                         kw.volume,
                         kw.difficulty,
                         kw.source,
+                        kw.aeo_opportunity,
+                        kw.has_featured_snippet,
+                        kw.has_paa,
                     ]
                 )
 

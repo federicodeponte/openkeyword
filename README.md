@@ -1,20 +1,23 @@
 # 🔑 OpenKeywords
 
-**AI-powered SEO keyword generation using Google Gemini + SE Ranking + Deep Research**
+**AI-powered SEO keyword generation using Google Gemini + SE Ranking + Deep Research + SERP Analysis**
 
-Generate high-quality, clustered SEO keywords for any business in any language.
+Generate high-quality, clustered SEO keywords with AEO opportunity scoring for any business in any language.
 
 ## ✨ Features
 
 - **🔍 Deep Research** - Find hyper-niche keywords from Reddit, Quora, forums using Google Search grounding
-- **AI Keyword Generation** - Google Gemini generates diverse, relevant keywords
-- **Intent Classification** - Automatic classification (question, commercial, transactional, comparison, informational)
-- **Company-Fit Scoring** - AI scores each keyword's relevance (0-100)
-- **Semantic Clustering** - Groups keywords into topic clusters
-- **Two-Stage Deduplication** - Fast token-based + AI semantic deduplication
-- **SE Ranking Gap Analysis** - Find competitor keyword gaps (optional)
-- **Any Language** - Dynamic language support, no hardcoded lists
-- **AEO Optimized** - Prioritizes question keywords for Answer Engine Optimization
+- **📊 SERP Analysis** - DataForSEO integration for featured snippet & PAA detection
+- **📈 Volume Lookup** - Real search volumes from DataForSEO Keywords Data API
+- **🎯 AEO Scoring** - Opportunity scores (0-100) based on featured snippets, PAA, competition
+- **🤖 AI Keyword Generation** - Google Gemini generates diverse, relevant keywords
+- **🏷️ Intent Classification** - Automatic classification (question, commercial, transactional, comparison, informational)
+- **⭐ Company-Fit Scoring** - AI scores each keyword's relevance (0-100)
+- **📦 Semantic Clustering** - Groups keywords into topic clusters
+- **🔄 Two-Stage Deduplication** - Fast token-based + AI semantic deduplication
+- **🔌 SE Ranking Gap Analysis** - Find competitor keyword gaps (optional)
+- **🌍 Any Language** - Dynamic language support, no hardcoded lists
+- **💡 AEO Optimized** - Prioritizes question keywords for Answer Engine Optimization
 
 ## 🚀 Quick Start
 
@@ -35,8 +38,13 @@ pip install -e .
 ### Set API Keys
 
 ```bash
+# Required
 export GEMINI_API_KEY="your-gemini-api-key"
-export SERANKING_API_KEY="your-seranking-key"  # Optional - for gap analysis
+
+# Optional - for enhanced features
+export SERANKING_API_KEY="your-seranking-key"    # Gap analysis (--with-gaps)
+export DATAFORSEO_LOGIN="your-email"             # SERP analysis (--with-serp)
+export DATAFORSEO_PASSWORD="your-password"       # SERP analysis (--with-serp)
 ```
 
 ### CLI Usage
@@ -64,12 +72,29 @@ openkeywords generate \
   --count 50 \
   --with-gaps
 
-# Full power: Research + Gap Analysis + AI
+# 📊 With SERP Analysis (AEO opportunity scoring)
+openkeywords generate \
+  --company "Acme Software" \
+  --industry "B2B SaaS" \
+  --count 50 \
+  --with-serp \
+  --serp-sample 15
+
+# 📈 With Volume Data (real search volumes from DataForSEO)
+openkeywords generate \
+  --company "Acme Software" \
+  --industry "B2B SaaS" \
+  --count 50 \
+  --with-volume
+
+# Full power: Research + SERP + Volume + Gap Analysis
 openkeywords generate \
   --company "Acme Software" \
   --url "https://acme.com" \
   --industry "B2B SaaS" \
   --with-research \
+  --with-serp \
+  --with-volume \
   --with-gaps \
   --count 100
 
@@ -118,13 +143,16 @@ async def generate_keywords():
 
     # Configure generation
     config = GenerationConfig(
-        target_count=50,           # Keywords to return
-        min_score=40,              # Minimum company-fit score
-        enable_clustering=True,    # Group into clusters
-        cluster_count=6,           # Target cluster count
-        language="english",        # Any language name
-        region="us",               # Country code
-        enable_research=True,      # 🔍 Enable deep research (Reddit, Quora, forums)
+        target_count=50,             # Keywords to return
+        min_score=40,                # Minimum company-fit score
+        enable_clustering=True,      # Group into clusters
+        cluster_count=6,             # Target cluster count
+        language="english",          # Any language name
+        region="us",                 # Country code
+        enable_research=True,        # 🔍 Enable deep research (Reddit, Quora, forums)
+        enable_serp_analysis=True,   # 📊 Enable SERP analysis (featured snippets, PAA)
+        serp_sample_size=15,         # How many keywords to analyze for SERP features
+        enable_volume_lookup=True,   # 📈 Get real search volumes from DataForSEO
     )
 
     # Generate keywords
@@ -158,8 +186,13 @@ asyncio.run(generate_keywords())
 | `score` | int | Company-fit score (0-100) |
 | `cluster_name` | str | Semantic cluster grouping |
 | `is_question` | bool | Is this a question-based keyword? |
-| `volume` | int | Search volume (from SE Ranking gap analysis) |
-| `difficulty` | int | SEO difficulty (from SE Ranking gap analysis) |
+| `source` | str | Where keyword came from: `ai_generated`, `research_reddit`, `research_quora`, `research_niche`, `gap_analysis`, `serp_paa` |
+| `volume` | int | Monthly search volume (from DataForSEO --with-volume or SE Ranking --with-gaps) |
+| `difficulty` | int | Keyword difficulty 0-100 (from DataForSEO or SE Ranking) |
+| `aeo_opportunity` | int | AEO opportunity score 0-100 (from SERP analysis) |
+| `has_featured_snippet` | bool | SERP has featured snippet (from SERP analysis) |
+| `has_paa` | bool | SERP has People Also Ask (from SERP analysis) |
+| `serp_analyzed` | bool | Whether SERP was analyzed for this keyword |
 
 ### Example Output
 
@@ -314,6 +347,66 @@ result = await generator.generate(
 
 **Note:** Without SE Ranking, `volume` and `difficulty` will be `0` (AI-only generation still works perfectly).
 
+## 📊 SERP Analysis (DataForSEO)
+
+SERP Analysis provides **agency-level AEO opportunity scoring** using the DataForSEO API.
+
+**What it detects:**
+- **Featured Snippets** - Keywords with snippets are prime AEO targets
+- **People Also Ask (PAA)** - Indicates Google wants Q&A content
+- **Related Searches** - Bonus keyword discovery
+- **Competition Level** - Who ranks in top 5 (big players vs niche sites)
+
+**AEO Opportunity Scoring (0-100):**
+
+| Factor | Score Impact |
+|--------|--------------|
+| Has Featured Snippet | +25 points |
+| Has PAA Section | +15 points |
+| Rich PAA (4+ questions) | +5 points |
+| Question keyword | +10 points |
+| No big players in top 5 | +10 points |
+| High competition (3+ big sites) | -15 points |
+
+**Usage:**
+
+```bash
+# Enable SERP analysis
+openkeywords generate \
+  --company "Acme Software" \
+  --industry "B2B SaaS" \
+  --with-serp \
+  --serp-sample 15 \  # Analyze top 15 keywords
+  --output keywords.csv
+```
+
+**Python:**
+
+```python
+from openkeywords import SerpAnalyzer, analyze_for_aeo
+
+# Quick analysis
+analyses, bonus_keywords = await analyze_for_aeo(
+    ["what is SEO", "best SEO tools"],
+    country="us",
+)
+
+for kw, analysis in analyses.items():
+    f = analysis.features
+    print(f"{kw}: AEO={f.aeo_opportunity} FS={f.has_featured_snippet} PAA={f.has_paa}")
+
+# Or use the analyzer directly
+analyzer = SerpAnalyzer(
+    dataforseo_login="your-email",
+    dataforseo_password="your-password",
+)
+analyses, bonus = await analyzer.analyze_keywords(keywords)
+```
+
+**Cost:** $0.50 per 1,000 queries ($0.0005 per keyword)
+
+**Note:** Without DataForSEO credentials, SERP analysis is skipped but keyword generation works normally.
+
 ## ⚙️ Configuration
 
 ### GenerationConfig Options
@@ -327,6 +420,9 @@ result = await generator.generate(
 | `language` | "english" | Target language (any language) |
 | `region` | "us" | Target region (country code) |
 | `enable_research` | False | 🔍 Enable deep research (Reddit, Quora, forums) |
+| `enable_serp_analysis` | False | 📊 Enable SERP analysis for AEO scoring |
+| `serp_sample_size` | 15 | Number of top keywords to analyze for SERP features |
+| `enable_volume_lookup` | False | 📈 Get real search volumes from DataForSEO |
 
 ### Intent Distribution
 
@@ -385,5 +481,6 @@ Contributions welcome! Please submit issues and pull requests.
 ## 🔗 Links
 
 - [SE Ranking API](https://seranking.com/api-documentation.html)
+- [DataForSEO API](https://dataforseo.com/apis/serp-api)
 - [Google Gemini](https://ai.google.dev/)
 - [SCAILE Technologies](https://scaile.tech)

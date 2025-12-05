@@ -1,5 +1,5 @@
 """
-Core keyword generation using Google Gemini + SE Ranking gap analysis + Deep Research
+Core keyword generation using Google Gemini + SE Ranking gap analysis + Deep Research + SERP Analysis
 """
 
 import asyncio
@@ -24,8 +24,9 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
-# Lazy import for research engine (optional dependency)
+# Lazy imports for optional features
 _research_engine = None
+_serp_analyzer = None
 
 def _get_research_engine(api_key: str, model: str):
     """Lazily initialize research engine."""
@@ -34,6 +35,14 @@ def _get_research_engine(api_key: str, model: str):
         from .researcher import ResearchEngine
         _research_engine = ResearchEngine(api_key=api_key, model=model)
     return _research_engine
+
+def _get_serp_analyzer(language: str, country: str):
+    """Lazily initialize SERP analyzer."""
+    global _serp_analyzer
+    if _serp_analyzer is None:
+        from .serp_analyzer import SerpAnalyzer
+        _serp_analyzer = SerpAnalyzer(language=language, country=country)
+    return _serp_analyzer
 
 # Valid intent types
 VALID_INTENTS = {"transactional", "commercial", "comparison", "informational", "question"}
@@ -111,6 +120,8 @@ class KeywordGenerator:
         logger.info(f"Language: {config.language}, Region: {config.region}")
         if config.enable_research:
             logger.info("Deep research ENABLED (Reddit, Quora, forums)")
+        if config.enable_serp_analysis:
+            logger.info(f"SERP analysis ENABLED (top {config.serp_sample_size} keywords)")
 
         all_keywords = []
 
@@ -166,23 +177,65 @@ class KeywordGenerator:
                 all_keywords, company_info, config.cluster_count
             )
 
-        # Step 8: Limit to target count
+        # Step 8: SERP Analysis (if enabled) - enriches with AEO scores
+        serp_analyses = {}
+        bonus_keywords = []
+        if config.enable_serp_analysis:
+            serp_analyses, bonus_keywords = await self._analyze_serp(
+                all_keywords, config
+            )
+            logger.info(f"🔍 SERP analysis complete. Found {len(bonus_keywords)} bonus keywords from PAA/related")
+            
+            # Add bonus keywords (they need scoring and won't have SERP data yet)
+            if bonus_keywords:
+                bonus_kw_dicts = [
+                    {"keyword": kw, "intent": "question" if "?" in kw else "informational", 
+                     "score": 60, "source": "serp_paa", "is_question": "?" in kw}
+                    for kw in bonus_keywords[:config.target_count // 4]  # Limit bonus
+                ]
+                all_keywords.extend(bonus_kw_dicts)
+                # Re-dedupe after adding bonus
+                all_keywords, _ = self._deduplicate_fast(all_keywords)
+
+        # Step 9: Limit to target count
         all_keywords = all_keywords[: config.target_count]
 
-        # Build result
-        keyword_objects = [
-            Keyword(
-                keyword=kw["keyword"],
+        # Step 10: Volume lookup (DataForSEO Keywords Data API)
+        volume_data = {}
+        if config.enable_volume_lookup:
+            volume_data = await self._lookup_volumes(
+                [kw["keyword"] for kw in all_keywords],
+                config.language,
+                config.region
+            )
+            logger.info(f"📈 Volume lookup: got data for {len(volume_data)}/{len(all_keywords)} keywords")
+
+        # Build result with SERP and volume enrichment
+        keyword_objects = []
+        for kw in all_keywords:
+            kw_text = kw["keyword"]
+            serp_data = serp_analyses.get(kw_text)
+            vol_data = volume_data.get(kw_text.lower(), {})
+            
+            # Volume comes from DataForSEO if enabled, else from gap analysis
+            volume = vol_data.get("volume", 0) if vol_data else kw.get("volume", 0)
+            difficulty = vol_data.get("difficulty", 50) if vol_data else kw.get("difficulty", 50)
+            
+            keyword_objects.append(Keyword(
+                keyword=kw_text,
                 intent=kw.get("intent", "informational"),
                 score=kw.get("score", 0),
                 cluster_name=kw.get("cluster_name"),
                 is_question=kw.get("is_question", False),
-                volume=kw.get("volume", 0),
-                difficulty=kw.get("difficulty", 50),
+                volume=volume,
+                difficulty=difficulty,
                 source=kw.get("source", "ai_generated"),
-            )
-            for kw in all_keywords
-        ]
+                # SERP/AEO fields
+                aeo_opportunity=serp_data.features.aeo_opportunity if serp_data else 0,
+                has_featured_snippet=serp_data.features.has_featured_snippet if serp_data else False,
+                has_paa=serp_data.features.has_paa if serp_data else False,
+                serp_analyzed=serp_data is not None,
+            ))
 
         # Build clusters
         clusters_map = defaultdict(list)
@@ -289,6 +342,98 @@ class KeywordGenerator:
         except Exception as e:
             logger.error(f"Deep research failed: {e}")
             return []
+
+    async def _analyze_serp(
+        self, keywords: list[dict], config: GenerationConfig
+    ) -> tuple[dict, list[str]]:
+        """
+        Analyze SERP features for top keywords using DataForSEO.
+        
+        Returns:
+            Tuple of (serp_analyses dict, bonus_keywords list)
+        """
+        if not keywords:
+            return {}, []
+        
+        try:
+            # Get SERP analyzer
+            analyzer = _get_serp_analyzer(
+                language=config.language[:2] if len(config.language) > 2 else config.language,
+                country=config.region,
+            )
+            
+            # Only analyze top N keywords (SERP calls cost money)
+            top_keywords = [kw["keyword"] for kw in keywords[:config.serp_sample_size]]
+            
+            logger.info(f"Analyzing SERP for {len(top_keywords)} top keywords...")
+            
+            # Run SERP analysis
+            analyses, bonus = await analyzer.analyze_keywords(
+                top_keywords,
+                extract_bonus=True,
+            )
+            
+            # Log findings
+            snippets = sum(1 for a in analyses.values() if a.features.has_featured_snippet)
+            paa_count = sum(1 for a in analyses.values() if a.features.has_paa)
+            avg_aeo = sum(a.features.aeo_opportunity for a in analyses.values()) / len(analyses) if analyses else 0
+            
+            logger.info(f"SERP results: {snippets} featured snippets, {paa_count} PAA sections, avg AEO score: {avg_aeo:.0f}")
+            
+            return analyses, bonus
+            
+        except Exception as e:
+            logger.error(f"SERP analysis failed: {e}")
+            return {}, []
+
+    async def _lookup_volumes(
+        self, keywords: list[str], language: str, region: str
+    ) -> dict[str, dict]:
+        """
+        Look up search volumes and difficulty using DataForSEO Keywords Data API.
+        
+        Args:
+            keywords: List of keywords to look up
+            language: Language code (e.g., "english" or "en")
+            region: Country code (e.g., "us", "de")
+        
+        Returns:
+            Dict mapping keyword (lowercase) -> {volume, difficulty, cpc, competition_level}
+        """
+        if not keywords:
+            return {}
+        
+        try:
+            from .dataforseo_client import DataForSEOClient
+            
+            client = DataForSEOClient()
+            if not client.is_configured():
+                logger.warning("DataForSEO not configured - skipping volume lookup")
+                return {}
+            
+            # Map language name to code
+            lang_code = language[:2].lower() if len(language) > 2 else language.lower()
+            
+            # Get keyword data in batches (API limit is 1000 per request)
+            all_data = {}
+            batch_size = 700  # Leave some margin
+            
+            for i in range(0, len(keywords), batch_size):
+                batch = keywords[i:i + batch_size]
+                logger.info(f"Looking up volumes for batch {i//batch_size + 1} ({len(batch)} keywords)...")
+                
+                batch_data = await client.get_keyword_data(
+                    keywords=batch,
+                    language=lang_code,
+                    country=region.lower(),
+                )
+                all_data.update(batch_data)
+            
+            return all_data
+            
+        except Exception as e:
+            logger.error(f"Volume lookup failed: {e}")
+            return {}
 
     async def _generate_ai_keywords(
         self, company_info: CompanyInfo, config: GenerationConfig, target_count: int

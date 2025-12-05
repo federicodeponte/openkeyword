@@ -55,6 +55,9 @@ def main():
 @click.option("--min-score", default=40, help="Minimum company-fit score")
 @click.option("--with-gaps", is_flag=True, help="Enable SE Ranking gap analysis (requires URL)")
 @click.option("--with-research", is_flag=True, help="Enable deep research (Reddit, Quora, forums)")
+@click.option("--with-serp", is_flag=True, help="Enable SERP analysis for AEO scoring (uses DataForSEO)")
+@click.option("--serp-sample", default=15, help="Number of keywords to SERP analyze (default: 15)")
+@click.option("--with-volume", is_flag=True, help="Get real search volumes from DataForSEO")
 @click.option("--output", "-o", default=None, help="Output file (csv or json)")
 @click.option("--competitors", default=None, help="Competitor URLs (comma-separated)")
 @click.option("--verbose", "-v", is_flag=True, help="Verbose output")
@@ -74,6 +77,9 @@ def generate(
     min_score: int,
     with_gaps: bool,
     with_research: bool,
+    with_serp: bool,
+    serp_sample: int,
+    with_volume: bool,
     competitors: str,
     output: str,
     verbose: bool,
@@ -127,12 +133,19 @@ def generate(
         language=language,
         region=region,
         enable_research=with_research,
+        enable_serp_analysis=with_serp,
+        serp_sample_size=serp_sample,
+        enable_volume_lookup=with_volume,
     )
 
     console.print(f"\n[bold blue]🔑 OpenKeywords[/bold blue]")
     console.print(f"Generating {count} keywords for [green]{company}[/green]")
     if with_research:
         console.print("[bold magenta]🔍 Deep Research enabled (Reddit, Quora, forums)[/bold magenta]")
+    if with_serp:
+        console.print(f"[bold cyan]📊 SERP Analysis enabled (top {serp_sample} keywords via DataForSEO)[/bold cyan]")
+    if with_volume:
+        console.print("[bold yellow]📈 Volume Lookup enabled (DataForSEO Keywords Data API)[/bold yellow]")
     console.print()
 
     # Run generation
@@ -184,11 +197,16 @@ def generate(
     table.add_column("Score", justify="right")
     table.add_column("Cluster", style="yellow")
 
-    if with_gaps:
+    if with_gaps or with_volume:
         table.add_column("Volume", justify="right")
         table.add_column("Difficulty", justify="right")
 
-    if with_research:
+    if with_serp:
+        table.add_column("AEO", justify="right", style="bold green")
+        table.add_column("FS", justify="center")  # Featured Snippet
+        table.add_column("PAA", justify="center")  # People Also Ask
+
+    if with_research or with_gaps:
         table.add_column("Source", style="magenta")
 
     for kw in result.keywords[:10]:
@@ -198,15 +216,34 @@ def generate(
             str(kw.score),
             kw.cluster_name or "-",
         ]
-        if with_gaps:
-            row.extend([str(kw.volume), str(kw.difficulty)])
-        if with_research:
+        if with_gaps or with_volume:
+            vol_str = f"{kw.volume:,}" if kw.volume > 0 else "-"
+            row.extend([vol_str, str(kw.difficulty)])
+        if with_serp:
+            aeo_str = str(kw.aeo_opportunity) if kw.serp_analyzed else "-"
+            fs_str = "✅" if kw.has_featured_snippet else "-"
+            paa_str = "✅" if kw.has_paa else "-"
+            row.extend([aeo_str, fs_str, paa_str])
+        if with_research or with_gaps:
             # Shorten source name for display
-            src = kw.source.replace("research_", "📍").replace("ai_generated", "🤖").replace("gap_analysis", "📊")
+            src = kw.source.replace("research_", "📍").replace("ai_generated", "🤖").replace("gap_analysis", "📊").replace("serp_paa", "📝")
             row.append(src)
         table.add_row(*row)
 
     console.print(table)
+    
+    # Show AEO summary if SERP analysis was enabled
+    if with_serp:
+        analyzed = [kw for kw in result.keywords if kw.serp_analyzed]
+        if analyzed:
+            high_aeo = [kw for kw in analyzed if kw.aeo_opportunity >= 70]
+            with_fs = [kw for kw in analyzed if kw.has_featured_snippet]
+            with_paa = [kw for kw in analyzed if kw.has_paa]
+            console.print(f"\n[bold cyan]📊 AEO Summary:[/bold cyan]")
+            console.print(f"  Analyzed: {len(analyzed)} keywords")
+            console.print(f"  High AEO opportunity (≥70): {len(high_aeo)}")
+            console.print(f"  With Featured Snippet: {len(with_fs)}")
+            console.print(f"  With People Also Ask: {len(with_paa)}")
 
     # Export if output specified
     if output:
@@ -229,20 +266,38 @@ def check():
 
     gemini_key = os.getenv("GEMINI_API_KEY")
     seranking_key = os.getenv("SERANKING_API_KEY")
+    dataforseo_login = os.getenv("DATAFORSEO_LOGIN")
+    dataforseo_password = os.getenv("DATAFORSEO_PASSWORD")
 
+    console.print("[bold]Required:[/bold]")
     if gemini_key:
-        console.print(f"[green]✓[/green] GEMINI_API_KEY: Set ({gemini_key[:8]}...)")
+        console.print(f"  [green]✓[/green] GEMINI_API_KEY: Set ({gemini_key[:8]}...)")
     else:
-        console.print("[red]✗[/red] GEMINI_API_KEY: Not set")
+        console.print("  [red]✗[/red] GEMINI_API_KEY: Not set")
 
+    console.print("\n[bold]Optional (for enhanced features):[/bold]")
+    
     if seranking_key:
-        console.print(f"[green]✓[/green] SERANKING_API_KEY: Set ({seranking_key[:8]}...)")
+        console.print(f"  [green]✓[/green] SERANKING_API_KEY: Set ({seranking_key[:8]}...) → gap analysis")
     else:
-        console.print("[yellow]○[/yellow] SERANKING_API_KEY: Not set (optional)")
+        console.print("  [yellow]○[/yellow] SERANKING_API_KEY: Not set → --with-gaps disabled")
+
+    if dataforseo_login and dataforseo_password:
+        console.print(f"  [green]✓[/green] DATAFORSEO_LOGIN: Set ({dataforseo_login[:8]}...) → SERP analysis")
+        console.print(f"  [green]✓[/green] DATAFORSEO_PASSWORD: Set → SERP analysis")
+    else:
+        console.print("  [yellow]○[/yellow] DATAFORSEO_LOGIN/PASSWORD: Not set → --with-serp disabled")
 
     console.print("\n[bold]Setup Instructions:[/bold]")
+    console.print("  # Required")
     console.print("  export GEMINI_API_KEY='your-gemini-api-key'")
-    console.print("  export SERANKING_API_KEY='your-seranking-key'  # Optional")
+    console.print("")
+    console.print("  # Optional: SE Ranking for gap analysis")
+    console.print("  export SERANKING_API_KEY='your-seranking-key'")
+    console.print("")
+    console.print("  # Optional: DataForSEO for SERP/AEO analysis")
+    console.print("  export DATAFORSEO_LOGIN='your-email'")
+    console.print("  export DATAFORSEO_PASSWORD='your-password'")
 
 
 if __name__ == "__main__":

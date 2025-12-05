@@ -53,6 +53,9 @@ class TestGenerationConfig:
         assert config.cluster_count == 6
         assert config.language == "english"
         assert config.region == "us"
+        assert config.enable_research is False
+        assert config.enable_serp_analysis is False
+        assert config.serp_sample_size == 15
 
     def test_custom_config(self):
         """Test custom configuration"""
@@ -67,6 +70,17 @@ class TestGenerationConfig:
         assert config.language == "german"
         assert config.region == "de"
 
+    def test_config_with_serp(self):
+        """Test configuration with SERP analysis enabled"""
+        config = GenerationConfig(
+            enable_research=True,
+            enable_serp_analysis=True,
+            serp_sample_size=20,
+        )
+        assert config.enable_research is True
+        assert config.enable_serp_analysis is True
+        assert config.serp_sample_size == 20
+
 
 class TestKeyword:
     """Tests for Keyword model"""
@@ -80,6 +94,11 @@ class TestKeyword:
         assert kw.is_question is False
         assert kw.volume == 0
         assert kw.difficulty == 50
+        # AEO defaults
+        assert kw.aeo_opportunity == 0
+        assert kw.has_featured_snippet is False
+        assert kw.has_paa is False
+        assert kw.serp_analyzed is False
 
     def test_keyword_full(self):
         """Test keyword with all fields"""
@@ -97,6 +116,22 @@ class TestKeyword:
         assert kw.score == 85
         assert kw.is_question is True
         assert kw.volume == 1200
+
+    def test_keyword_with_aeo_fields(self):
+        """Test keyword with AEO/SERP fields"""
+        kw = Keyword(
+            keyword="what is AEO optimization",
+            intent="question",
+            score=90,
+            aeo_opportunity=85,
+            has_featured_snippet=True,
+            has_paa=True,
+            serp_analyzed=True,
+        )
+        assert kw.aeo_opportunity == 85
+        assert kw.has_featured_snippet is True
+        assert kw.has_paa is True
+        assert kw.serp_analyzed is True
 
 
 class TestCluster:

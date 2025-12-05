@@ -1,12 +1,13 @@
 """
-OpenKeywords - AI-powered SEO keyword generation using Gemini + SE Ranking + Deep Research.
+OpenKeywords - AI-powered SEO keyword generation using Gemini + SE Ranking + Deep Research + SERP Analysis.
 
-Generate high-quality, clustered SEO keywords for any business.
+Generate high-quality, clustered SEO keywords for any business with AEO opportunity scoring.
 
 Features:
 - AI keyword generation (Gemini)
 - SE Ranking gap analysis (competitor keywords)
 - Deep Research (Reddit, Quora, forums) for hyper-niche keywords
+- SERP Analysis (DataForSEO) for AEO opportunity scoring
 
 Usage:
     from openkeywords import KeywordGenerator, CompanyInfo, GenerationConfig
@@ -14,11 +15,14 @@ Usage:
     generator = KeywordGenerator()
     result = await generator.generate(
         CompanyInfo(name="Acme Software", industry="B2B SaaS"),
-        GenerationConfig(enable_research=True),  # Enable deep research
+        GenerationConfig(
+            enable_research=True,       # Reddit, Quora, forums
+            enable_serp_analysis=True,  # Featured snippet detection
+        ),
     )
 
     for kw in result.keywords:
-        print(f"{kw.keyword} | {kw.intent} | Score: {kw.score} | Source: {kw.source}")
+        print(f"{kw.keyword} | AEO: {kw.aeo_opportunity} | FS: {kw.has_featured_snippet}")
 """
 
 from .models import (
@@ -33,8 +37,10 @@ from .generator import KeywordGenerator
 from .seranking_client import SEORankingAPIClient
 from .gap_analyzer import SEORankingAPI, AEOContentGapAnalyzer
 from .researcher import ResearchEngine
+from .serp_analyzer import SerpAnalyzer, SerpFeatures, SerpAnalysis, analyze_for_aeo
+from .dataforseo_client import DataForSEOClient, SerpResponse, search_serp
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = [
     # Main API
     "KeywordGenerator",
@@ -50,4 +56,12 @@ __all__ = [
     "AEOContentGapAnalyzer",
     # Deep Research
     "ResearchEngine",
+    # SERP Analysis (DataForSEO)
+    "SerpAnalyzer",
+    "SerpFeatures",
+    "SerpAnalysis",
+    "analyze_for_aeo",
+    "DataForSEOClient",
+    "SerpResponse",
+    "search_serp",
 ]
