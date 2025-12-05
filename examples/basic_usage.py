@@ -3,6 +3,9 @@ OpenKeywords - Basic Usage Example
 
 Before running, set your API key:
     export GEMINI_API_KEY='your-gemini-api-key'
+
+Run from project root:
+    python examples/basic_usage.py
 """
 
 import asyncio
@@ -18,7 +21,7 @@ async def main():
         print("  export GEMINI_API_KEY='your-key'")
         return
 
-    # Initialize generator
+    # Initialize generator (uses GEMINI_API_KEY env var)
     generator = KeywordGenerator()
 
     # Define company information
@@ -38,8 +41,8 @@ async def main():
         min_score=50,              # Only keep keywords scoring 50+
         enable_clustering=True,    # Group into semantic clusters
         cluster_count=5,           # Create 5 clusters
-        language="english",
-        region="us",
+        language="english",        # Target language
+        region="us",               # Target region
     )
 
     print(f"\n🔑 Generating keywords for {company.name}...")
@@ -52,11 +55,12 @@ async def main():
     # Display results
     print(f"✓ Generated {len(result.keywords)} keywords in {result.processing_time_seconds:.1f}s")
     print(f"  Average score: {result.statistics.avg_score:.1f}")
+    print(f"  Duplicates removed: {result.statistics.duplicate_count}")
     print(f"  Clusters: {len(result.clusters)}")
 
     print("\n📊 Intent Distribution:")
     for intent, count in result.statistics.intent_breakdown.items():
-        pct = (count / len(result.keywords)) * 100
+        pct = (count / len(result.keywords)) * 100 if result.keywords else 0
         print(f"   {intent}: {count} ({pct:.0f}%)")
 
     print("\n🏷️ Clusters:")
@@ -64,9 +68,11 @@ async def main():
         print(f"   {cluster.name}: {cluster.count} keywords")
 
     print("\n📝 Top 10 Keywords:")
-    print("-" * 70)
+    print("-" * 80)
+    print(f"{'Keyword':<45} | {'Intent':<15} | {'Score':>5}")
+    print("-" * 80)
     for kw in result.keywords[:10]:
-        print(f"  {kw.keyword:<45} | {kw.intent:<15} | {kw.score}")
+        print(f"{kw.keyword:<45} | {kw.intent:<15} | {kw.score:>5}")
 
     # Export to files
     result.to_csv("keywords_output.csv")
@@ -76,5 +82,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-

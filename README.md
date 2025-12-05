@@ -1,18 +1,19 @@
 # 🔑 OpenKeywords
 
-**AI-powered SEO keyword generation using Gemini + SE Ranking**
+**AI-powered SEO keyword generation using Google Gemini + SE Ranking**
 
-Generate high-quality, clustered SEO keywords for any business in seconds.
+Generate high-quality, clustered SEO keywords for any business in any language.
 
 ## ✨ Features
 
-- **AI Keyword Generation** - Uses Google Gemini to generate relevant keywords
-- **Intent Classification** - Automatic classification (informational, commercial, transactional, question, comparison)
-- **Company-Fit Scoring** - AI scores each keyword's relevance to your business (0-100)
-- **Semantic Clustering** - Groups keywords into topic clusters for content planning
-- **Deduplication** - Removes exact and near-duplicate keywords
-- **SE Ranking Integration** - Optional real search volume & difficulty data via SE Ranking API
-- **Multi-language Support** - Generate keywords in any language/region
+- **AI Keyword Generation** - Google Gemini generates diverse, relevant keywords
+- **Intent Classification** - Automatic classification (question, commercial, transactional, comparison, informational)
+- **Company-Fit Scoring** - AI scores each keyword's relevance (0-100)
+- **Semantic Clustering** - Groups keywords into topic clusters
+- **Two-Stage Deduplication** - Fast token-based + AI semantic deduplication
+- **SE Ranking Gap Analysis** - Find competitor keyword gaps (optional)
+- **Any Language** - Dynamic language support, no hardcoded lists
+- **AEO Optimized** - Prioritizes question keywords for Answer Engine Optimization
 
 ## 🚀 Quick Start
 
@@ -34,7 +35,7 @@ pip install -e .
 
 ```bash
 export GEMINI_API_KEY="your-gemini-api-key"
-export SERANKING_API_KEY="your-seranking-key"  # Optional
+export SERANKING_API_KEY="your-seranking-key"  # Optional - for gap analysis
 ```
 
 ### CLI Usage
@@ -47,74 +48,106 @@ openkeywords generate \
   --services "project management,team collaboration" \
   --count 50
 
-# With SE Ranking volume data
+# With SE Ranking gap analysis (requires URL + API key)
 openkeywords generate \
   --company "Acme Software" \
   --url "https://acme.com" \
   --count 50 \
-  --with-volume
+  --with-gaps
+
+# Specify language and region
+openkeywords generate \
+  --company "SCAILE Technologies" \
+  --industry "AEO Marketing" \
+  --language "german" \
+  --region "de" \
+  --count 30
+
+# With competitors for gap analysis
+openkeywords generate \
+  --company "Acme" \
+  --url "https://acme.com" \
+  --competitors "competitor1.com,competitor2.com" \
+  --with-gaps
 
 # Output to file
 openkeywords generate \
   --company "Acme Software" \
   --count 50 \
   --output keywords.csv
+
+# Check configuration
+openkeywords check
 ```
 
 ### Python Usage
 
 ```python
-from openkeywords import KeywordGenerator, CompanyInfo
+import asyncio
+from openkeywords import KeywordGenerator, CompanyInfo, GenerationConfig
 
-# Initialize generator
-generator = KeywordGenerator(
-    gemini_api_key="your-key",  # or uses GEMINI_API_KEY env var
-    seranking_api_key="your-key",  # optional
-)
+async def generate_keywords():
+    # Initialize generator
+    generator = KeywordGenerator(
+        gemini_api_key="your-key",  # or uses GEMINI_API_KEY env var
+        seranking_api_key="your-key",  # optional - for gap analysis
+    )
 
-# Define company
-company = CompanyInfo(
-    name="Acme Software",
-    industry="B2B SaaS",
-    services=["project management", "team collaboration"],
-    target_audience="small businesses",
-    target_location="United States",
-)
+    # Define company
+    company = CompanyInfo(
+        name="Acme Software",
+        url="https://acme.com",  # Required for gap analysis
+        industry="B2B SaaS",
+        services=["project management", "team collaboration"],
+        products=["Acme Pro", "Acme Teams"],
+        target_audience="small businesses",
+        target_location="United States",
+        competitors=["competitor1.com", "competitor2.com"],  # Optional
+    )
 
-# Generate keywords
-result = await generator.generate(
-    company_info=company,
-    target_count=50,
-    language="english",
-    region="us",
-    enable_clustering=True,
-    cluster_count=5,
-)
+    # Configure generation
+    config = GenerationConfig(
+        target_count=50,           # Keywords to return
+        min_score=40,              # Minimum company-fit score
+        enable_clustering=True,    # Group into clusters
+        cluster_count=6,           # Target cluster count
+        language="english",        # Any language name
+        region="us",               # Country code
+    )
 
-# Access results
-for kw in result.keywords:
-    print(f"{kw.keyword} | {kw.intent} | Score: {kw.score}")
+    # Generate keywords
+    result = await generator.generate(company, config)
 
-# Export to CSV
-result.to_csv("keywords.csv")
+    # Access results
+    for kw in result.keywords[:10]:
+        print(f"{kw.keyword} | {kw.intent} | Score: {kw.score} | Cluster: {kw.cluster_name}")
 
-# Export to JSON
-result.to_json("keywords.json")
+    # Export
+    result.to_csv("keywords.csv")
+    result.to_json("keywords.json")
+
+    # Statistics
+    print(f"Total: {result.statistics.total}")
+    print(f"Avg Score: {result.statistics.avg_score:.1f}")
+    print(f"Intent breakdown: {result.statistics.intent_breakdown}")
+
+# Run
+asyncio.run(generate_keywords())
 ```
 
 ## 📊 Output Format
 
-### Keywords
+### Keyword Object
 
-| Field | Description |
-|-------|-------------|
-| `keyword` | The keyword text |
-| `intent` | Search intent: `informational`, `commercial`, `transactional`, `question`, `comparison` |
-| `score` | Company-fit score (0-100) |
-| `cluster_name` | Semantic cluster grouping |
-| `is_question` | Boolean - is this a question-based keyword? |
-| `volume` | Monthly search volume (if SE Ranking enabled) |
-| `difficulty` | SEO difficulty score (if SE Ranking enabled) |
+| Field | Type | Description |
+|-------|------|-------------|
+| `keyword` | str | The keyword text |
+| `intent` | str | `question`, `commercial`, `transactional`, `comparison`, `informational` |
+| `score` | int | Company-fit score (0-100) |
+| `cluster_name` | str | Semantic cluster grouping |
+| `is_question` | bool | Is this a question-based keyword? |
+| `volume` | int | Search volume (from SE Ranking gap analysis) |
+| `difficulty` | int | SEO difficulty (from SE Ranking gap analysis) |
 
 ### Example Output
 
@@ -124,7 +157,7 @@ result.to_json("keywords.json")
     {
       "keyword": "best project management software for small teams",
       "intent": "commercial",
-      "score": 87,
+      "score": 92,
       "cluster_name": "Product Comparison",
       "is_question": false,
       "volume": 1200,
@@ -133,7 +166,7 @@ result.to_json("keywords.json")
     {
       "keyword": "how to improve team collaboration remotely",
       "intent": "question",
-      "score": 72,
+      "score": 85,
       "cluster_name": "How-To Guides",
       "is_question": true,
       "volume": 890,
@@ -142,105 +175,148 @@ result.to_json("keywords.json")
   ],
   "clusters": [
     {"name": "Product Comparison", "count": 12},
-    {"name": "How-To Guides", "count": 8},
-    {"name": "Industry Solutions", "count": 15}
+    {"name": "How-To Guides", "count": 8}
   ],
   "statistics": {
     "total": 50,
     "avg_score": 71.4,
     "intent_breakdown": {
-      "commercial": 15,
-      "informational": 12,
-      "question": 10,
+      "question": 15,
+      "commercial": 12,
       "transactional": 8,
-      "comparison": 5
-    }
+      "comparison": 5,
+      "informational": 10
+    },
+    "duplicate_count": 23
   }
 }
 ```
-
-## ⚙️ Configuration
-
-### Generation Config
-
-```python
-from openkeywords import GenerationConfig
-
-config = GenerationConfig(
-    target_count=50,           # Number of keywords to generate
-    min_score=40,              # Minimum company-fit score
-    enable_clustering=True,    # Group keywords into clusters
-    cluster_count=6,           # Target number of clusters
-    language="english",        # Target language
-    region="us",               # Target region (country code)
-    enable_volume=False,       # Fetch SE Ranking volume data
-)
-```
-
-### Intent Distribution
-
-The generator aims for a balanced distribution:
-- **25%** Question keywords (AEO-optimized)
-- **25%** Commercial keywords (best, top, review)
-- **15%** Transactional keywords (buy, sign up, get)
-- **10%** Comparison keywords (vs, alternative)
-- **25%** Informational keywords (guides, tips)
-
-### Word Length Distribution
-
-Keywords are balanced by length:
-- **20%** Short (2-3 words) - e.g., "project management"
-- **50%** Medium (4-5 words) - e.g., "best project management software"
-- **30%** Long (6-7 words) - e.g., "how to choose project management tool"
-
-## 🔌 SE Ranking Integration
-
-SE Ranking provides real search volume and difficulty metrics.
-
-```python
-# Enable SE Ranking
-generator = KeywordGenerator(
-    gemini_api_key="...",
-    seranking_api_key="your-seranking-key",
-)
-
-# Generate with volume data
-result = await generator.generate(
-    company_info=company,
-    target_count=50,
-    enable_volume=True,  # Fetches SE Ranking data
-)
-```
-
-Without SE Ranking, `volume` and `difficulty` will be `0`.
 
 ## 🏗️ Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      OpenKeywords                            │
+│                      OpenKeywords Pipeline                   │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
-│  1. GENERATION (Gemini)                                     │
-│     └─ AI generates diverse keywords with intent            │
+│  1. SE RANKING GAP ANALYSIS (Optional)                      │
+│     └─ Find AEO-optimized keywords competitors rank for     │
 │                                                              │
-│  2. DEDUPLICATION                                           │
-│     └─ Remove exact + near-duplicates (O(n) algorithm)      │
+│  2. AI GENERATION (Gemini)                                  │
+│     └─ Generate diverse keywords with intent distribution   │
 │                                                              │
-│  3. SCORING (Gemini)                                        │
-│     └─ Score company fit (0-100)                            │
+│  3. FAST DEDUPLICATION                                      │
+│     └─ Exact match + token signature grouping O(n)          │
 │                                                              │
-│  4. VOLUME DATA (SE Ranking) [Optional]                     │
-│     └─ Fetch real search volume & difficulty                │
+│  4. SCORING (Gemini)                                        │
+│     └─ Score company fit (0-100) in parallel batches        │
 │                                                              │
-│  5. CLUSTERING (Gemini)                                     │
-│     └─ Group into semantic clusters                         │
+│  5. SEMANTIC DEDUPLICATION (Gemini)                         │
+│     └─ Single prompt removes near-duplicates                │
+│        "sign up X" vs "sign up for X" → keep best           │
 │                                                              │
-│  6. FILTERING                                               │
-│     └─ Apply min_score, enforce distributions               │
+│  6. CLUSTERING (Gemini)                                     │
+│     └─ Group into semantic topic clusters                   │
+│                                                              │
+│  7. FILTERING                                               │
+│     └─ Apply min_score, limit to target_count               │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+## 🔌 SE Ranking Gap Analysis
+
+SE Ranking provides competitor keyword gap analysis to find AEO-optimized opportunities.
+
+**What it does:**
+- Finds keywords your competitors rank for but you don't
+- Filters for AEO potential (question intent, low difficulty, featured snippets)
+- Provides real search volume and difficulty metrics
+
+**AEO Filtering Criteria:**
+- Volume: 100-5,000 (sweet spot for AI citations)
+- Difficulty: ≤35 (achievable rankings)
+- Word count: ≥3 (long-tail focus)
+- Intent: Prioritizes questions and informational queries
+
+```python
+# Enable gap analysis
+generator = KeywordGenerator(
+    gemini_api_key="...",
+    seranking_api_key="your-seranking-key",
+)
+
+# Generate with gap analysis (requires URL)
+result = await generator.generate(
+    CompanyInfo(
+        name="Acme",
+        url="https://acme.com",  # Required!
+        competitors=["competitor1.com", "competitor2.com"],  # Optional
+    ),
+    GenerationConfig(target_count=50),
+)
+```
+
+**Note:** Without SE Ranking, `volume` and `difficulty` will be `0` (AI-only generation still works perfectly).
+
+## ⚙️ Configuration
+
+### GenerationConfig Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `target_count` | 50 | Number of keywords to return |
+| `min_score` | 40 | Minimum company-fit score (0-100) |
+| `enable_clustering` | True | Group keywords into clusters |
+| `cluster_count` | 6 | Target number of clusters |
+| `language` | "english" | Target language (any language) |
+| `region` | "us" | Target region (country code) |
+
+### Intent Distribution
+
+The generator aims for a balanced distribution optimized for AEO:
+
+| Intent | Target | Description |
+|--------|--------|-------------|
+| **Question** | 25% | AEO-optimized (how, what, why, when) |
+| **Commercial** | 25% | Best, top, review, pricing |
+| **Transactional** | 15% | Buy, sign up, get quote |
+| **Comparison** | 10% | vs, alternative, difference |
+| **Informational** | 25% | Guides, tips, benefits |
+
+### Word Length Distribution
+
+| Length | Target | Example |
+|--------|--------|---------|
+| Short (2-3 words) | 20% | "project management" |
+| Medium (4-5 words) | 50% | "best project management software" |
+| Long (6-7 words) | 30% | "how to choose project management tool" |
+
+## 🌍 Multi-Language Support
+
+OpenKeywords supports **any language** without hardcoded lists:
+
+```bash
+# German keywords for German market
+openkeywords generate \
+  --company "SCAILE Technologies" \
+  --language "german" \
+  --region "de"
+
+# Spanish keywords for Mexico
+openkeywords generate \
+  --company "Acme Mexico" \
+  --language "spanish" \
+  --region "mx"
+
+# Japanese keywords
+openkeywords generate \
+  --company "株式会社アクメ" \
+  --language "japanese" \
+  --region "jp"
+```
+
+The AI dynamically adapts prompts for question words, intent patterns, and cultural context.
 
 ## 📝 License
 
@@ -248,12 +324,10 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## 🤝 Contributing
 
-Contributions welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) first.
+Contributions welcome! Please submit issues and pull requests.
 
 ## 🔗 Links
 
-- [Documentation](https://github.com/scaile/openkeywords)
 - [SE Ranking API](https://seranking.com/api-documentation.html)
 - [Google Gemini](https://ai.google.dev/)
-
-
+- [SCAILE Technologies](https://scaile.tech)
