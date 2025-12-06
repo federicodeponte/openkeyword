@@ -55,6 +55,7 @@ def main():
 @click.option("--min-score", default=40, help="Minimum company-fit score")
 @click.option("--with-gaps", is_flag=True, help="Enable SE Ranking gap analysis (requires URL)")
 @click.option("--with-research", is_flag=True, help="Enable deep research (Reddit, Quora, forums)")
+@click.option("--research-focus", is_flag=True, help="Agency mode: 70%+ research keywords, strict filtering, 4+ word minimum")
 @click.option("--with-serp", is_flag=True, help="Enable SERP analysis for AEO scoring (uses DataForSEO)")
 @click.option("--serp-sample", default=15, help="Number of keywords to SERP analyze (default: 15)")
 @click.option("--with-volume", is_flag=True, help="Get real search volumes from DataForSEO")
@@ -77,6 +78,7 @@ def generate(
     min_score: int,
     with_gaps: bool,
     with_research: bool,
+    research_focus: bool,
     with_serp: bool,
     serp_sample: int,
     with_volume: bool,
@@ -132,7 +134,8 @@ def generate(
         cluster_count=clusters,
         language=language,
         region=region,
-        enable_research=with_research,
+        enable_research=with_research or research_focus,  # research_focus implies research
+        research_focus=research_focus,
         enable_serp_analysis=with_serp,
         serp_sample_size=serp_sample,
         enable_volume_lookup=with_volume,
@@ -140,7 +143,9 @@ def generate(
 
     console.print(f"\n[bold blue]🔑 OpenKeywords[/bold blue]")
     console.print(f"Generating {count} keywords for [green]{company}[/green]")
-    if with_research:
+    if research_focus:
+        console.print("[bold red]🎯 RESEARCH FOCUS MODE: 70%+ research, 4+ words, strict filtering[/bold red]")
+    elif with_research:
         console.print("[bold magenta]🔍 Deep Research enabled (Reddit, Quora, forums)[/bold magenta]")
     if with_serp:
         console.print(f"[bold cyan]📊 SERP Analysis enabled (top {serp_sample} keywords via DataForSEO)[/bold cyan]")

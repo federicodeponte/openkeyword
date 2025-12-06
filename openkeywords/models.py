@@ -34,6 +34,14 @@ class GenerationConfig(BaseModel):
         default=False,
         description="Enable deep research (Reddit, Quora, forums) for hyper-niche keywords"
     )
+    research_focus: bool = Field(
+        default=False,
+        description="Agency mode: 70% research keywords, strict filtering of broad terms"
+    )
+    min_word_count: int = Field(
+        default=2,
+        description="Minimum word count for keywords (use 4+ for hyper-niche)"
+    )
     enable_serp_analysis: bool = Field(
         default=False,
         description="Enable SERP analysis for AEO opportunity scoring (uses DataForSEO)"

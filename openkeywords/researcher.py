@@ -115,12 +115,16 @@ class ResearchEngine:
         """
         all_keywords = []
 
+        # Over-generate from each source to account for deduplication
+        # Each source gets 50% of target, so total raw is ~150% before dedup
+        per_source = max(target_count // 2, 15)
+
         # Research tasks in parallel
         tasks = [
-            self._research_reddit(industry, services, language, target_count // 3),
-            self._research_questions(industry, services, language, target_count // 3),
+            self._research_reddit(industry, services, language, per_source),
+            self._research_questions(industry, services, language, per_source),
             self._research_niche_terms(
-                industry, services, products or [], language, target_count // 3
+                industry, services, products or [], language, per_source
             ),
         ]
 

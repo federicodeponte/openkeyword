@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from collections import defaultdict
 from typing import Optional
@@ -46,6 +47,17 @@ def _get_serp_analyzer(language: str, country: str):
 
 # Valid intent types
 VALID_INTENTS = {"transactional", "commercial", "comparison", "informational", "question"}
+
+# Broad keyword patterns to filter out (agency mode)
+BROAD_PATTERNS = [
+    r"^what is \w+$",  # "what is AEO" - too basic
+    r"^\w+ vs \w+$",   # "AEO vs SEO" - too broad
+    r"^best \w+$",     # "best tools" - too generic
+    r"^top \w+$",      # "top companies" - too generic
+    r"^\w+ guide$",    # "AEO guide" - too basic
+    r"^\w+ definition$",  # "X definition"
+    r"^\w+ meaning$",     # "X meaning"
+]
 
 
 class KeywordGenerator:
@@ -118,6 +130,13 @@ class KeywordGenerator:
 
         logger.info(f"Generating {config.target_count} keywords for {company_info.name}")
         logger.info(f"Language: {config.language}, Region: {config.region}")
+        
+        # Research focus mode: agency-level hyper-niche keywords
+        if config.research_focus:
+            config.enable_research = True  # Force research on
+            config.min_word_count = max(config.min_word_count, 4)  # Minimum 4 words
+            logger.info("🎯 RESEARCH FOCUS MODE: 70% research, 4+ word minimum, strict filtering")
+        
         if config.enable_research:
             logger.info("Deep research ENABLED (Reddit, Quora, forums)")
         if config.enable_serp_analysis:
@@ -128,7 +147,10 @@ class KeywordGenerator:
         # Step 1: Deep Research (if enabled) - Reddit, Quora, forums
         research_keywords = []
         if config.enable_research:
-            research_keywords = await self._get_research_keywords(company_info, config)
+            # Research focus: target 70% from research, otherwise 50%
+            research_ratio = 0.7 if config.research_focus else 0.5
+            research_target = int(config.target_count * research_ratio)
+            research_keywords = await self._get_research_keywords(company_info, config, research_target)
             logger.info(f"🔍 Deep research found {len(research_keywords)} hyper-niche keywords")
             all_keywords.extend(research_keywords)
 
@@ -139,13 +161,23 @@ class KeywordGenerator:
             logger.info(f"Got {len(gap_keywords)} gap keywords from SE Ranking")
             all_keywords.extend(gap_keywords)
 
-        # Step 3: AI keyword generation
-        # Generate more AI keywords to fill the gap
+        # Step 3: AI keyword generation (fill remaining slots)
         existing_count = len(research_keywords) + len(gap_keywords)
-        ai_target = max(config.target_count - existing_count, config.target_count // 3)
-        ai_keywords = await self._generate_ai_keywords(company_info, config, ai_target)
-        logger.info(f"Generated {len(ai_keywords)} AI keywords")
-        all_keywords.extend(ai_keywords)
+        # In research focus mode, only generate AI keywords if we don't have enough research
+        if config.research_focus:
+            # Only fill gap if research didn't return enough
+            ai_target = max(0, config.target_count - existing_count)
+            if existing_count >= config.target_count * 0.5:
+                ai_target = min(ai_target, config.target_count // 5)  # Max 20% AI backup
+        else:
+            ai_target = max(config.target_count - existing_count, config.target_count // 3)
+        
+        if ai_target > 0:
+            ai_keywords = await self._generate_ai_keywords(company_info, config, ai_target)
+            logger.info(f"Generated {len(ai_keywords)} AI keywords")
+            all_keywords.extend(ai_keywords)
+        else:
+            logger.info("Skipping AI generation - research provided enough keywords")
 
         if not all_keywords:
             return GenerationResult(
@@ -170,6 +202,21 @@ class KeywordGenerator:
         # Step 6: Filter by score
         all_keywords = [kw for kw in all_keywords if kw.get("score", 0) >= config.min_score]
         logger.info(f"After score filter: {len(all_keywords)} keywords")
+
+        # Step 6b: Filter by word count (hyper-niche mode)
+        if config.min_word_count > 2:
+            before_count = len(all_keywords)
+            all_keywords = [
+                kw for kw in all_keywords 
+                if len(kw.get("keyword", "").split()) >= config.min_word_count
+            ]
+            logger.info(f"After word count filter ({config.min_word_count}+ words): {len(all_keywords)} keywords ({before_count - len(all_keywords)} removed)")
+
+        # Step 6c: Filter broad patterns (research focus mode)
+        if config.research_focus:
+            before_count = len(all_keywords)
+            all_keywords = self._filter_broad_keywords(all_keywords)
+            logger.info(f"After broad pattern filter: {len(all_keywords)} keywords ({before_count - len(all_keywords)} removed)")
 
         # Step 7: Cluster keywords
         if config.enable_clustering and len(all_keywords) > 0:
@@ -302,7 +349,7 @@ class KeywordGenerator:
             return []
 
     async def _get_research_keywords(
-        self, company_info: CompanyInfo, config: GenerationConfig
+        self, company_info: CompanyInfo, config: GenerationConfig, target_count: int = None
     ) -> list[dict]:
         """
         Get keywords from deep research (Reddit, Quora, forums).
@@ -313,6 +360,9 @@ class KeywordGenerator:
         try:
             # Initialize research engine
             researcher = _get_research_engine(self.api_key, self.model_name)
+            
+            # Use provided target or default to 50%
+            research_target = target_count or (config.target_count // 2)
 
             # Run deep research
             research_keywords = await researcher.discover_keywords(
@@ -322,7 +372,7 @@ class KeywordGenerator:
                 products=company_info.products,
                 target_location=company_info.target_location or "United States",
                 language=config.language,
-                target_count=config.target_count // 2,  # Research provides ~50% of keywords
+                target_count=research_target,
             )
 
             # Normalize source names
@@ -616,6 +666,36 @@ Return JSON: {{"keywords": [{{"keyword": "...", "intent": "question|transactiona
 
         duplicate_count = original_count - len(unique)
         return unique, duplicate_count
+
+    def _filter_broad_keywords(self, keywords: list[dict]) -> list[dict]:
+        """
+        Filter out overly broad keywords using pattern matching.
+        
+        Removes generic patterns like:
+        - "what is X" (too basic)
+        - "X vs Y" (too broad)
+        - "best X" (too generic)
+        """
+        filtered = []
+        for kw in keywords:
+            keyword_text = kw.get("keyword", "").strip()
+            
+            # Check against broad patterns
+            is_broad = False
+            for pattern in BROAD_PATTERNS:
+                if re.match(pattern, keyword_text, re.IGNORECASE):
+                    logger.debug(f"Filtered broad keyword: {keyword_text}")
+                    is_broad = True
+                    break
+            
+            # Keep research keywords even if they match patterns (they're real user queries)
+            if is_broad and kw.get("source", "").startswith("research"):
+                is_broad = False  # Research keywords are trusted
+            
+            if not is_broad:
+                filtered.append(kw)
+        
+        return filtered
 
     async def _deduplicate_semantic(self, keywords: list[dict]) -> list[dict]:
         """
