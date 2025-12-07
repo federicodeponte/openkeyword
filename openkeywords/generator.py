@@ -37,12 +37,30 @@ def _get_research_engine(api_key: str, model: str):
         _research_engine = ResearchEngine(api_key=api_key, model=model)
     return _research_engine
 
-def _get_serp_analyzer(language: str, country: str):
-    """Lazily initialize SERP analyzer."""
+def _get_serp_analyzer(language: str, country: str, gemini_api_key: str = None):
+    """
+    Lazily initialize SERP analyzer.
+    
+    Uses Gemini SERP by default (FREE). DataForSEO is legacy/optional.
+    """
     global _serp_analyzer
     if _serp_analyzer is None:
-        from .serp_analyzer import SerpAnalyzer
-        _serp_analyzer = SerpAnalyzer(language=language, country=country)
+        import os
+        
+        # Default to Gemini SERP (FREE, native Google Search grounding)
+        logger.info("Using Gemini SERP with native Google Search grounding")
+        from .gemini_serp_analyzer import GeminiSerpAnalyzer
+        api_key = gemini_api_key or os.getenv("GEMINI_API_KEY")
+        if not api_key:
+            raise ValueError(
+                "GEMINI_API_KEY required for SERP analysis. "
+                "This uses Gemini's native Google Search grounding (FREE)."
+            )
+        _serp_analyzer = GeminiSerpAnalyzer(
+            gemini_api_key=api_key,
+            language=language,
+            country=country
+        )
     return _serp_analyzer
 
 # Valid intent types
@@ -77,7 +95,7 @@ class KeywordGenerator:
         self,
         gemini_api_key: Optional[str] = None,
         seranking_api_key: Optional[str] = None,
-        model: str = "gemini-2.0-flash",
+        model: str = "gemini-3-pro-preview",
     ):
         """
         Initialize the keyword generator.
@@ -92,6 +110,9 @@ class KeywordGenerator:
             raise ValueError(
                 "Gemini API key required. Set GEMINI_API_KEY env var or pass gemini_api_key."
             )
+
+        # Store as both for compatibility
+        self.gemini_api_key = self.api_key
 
         genai.configure(api_key=self.api_key)
         self.model = genai.GenerativeModel(model)
@@ -191,7 +212,19 @@ class KeywordGenerator:
         all_keywords, dup_count = self._deduplicate_fast(all_keywords)
         logger.info(f"After fast dedup: {len(all_keywords)} keywords ({dup_count} removed)")
 
-        # Step 4: Score keywords
+        # Step 3.5: Add hyper-niche variations (geo/industry targeting like openanalytics)
+        # Add BEFORE scoring so they get proper company-fit scores
+        if len(all_keywords) > 0:
+            niche_variations = self._generate_hyper_niche_variations(
+                all_keywords, company_info, config
+            )
+            if niche_variations:
+                all_keywords.extend(niche_variations)
+                logger.info(f"🔍 Added {len(niche_variations)} hyper-niche variations (geo/industry)")
+                # Re-dedupe after adding niche variations
+                all_keywords, _ = self._deduplicate_fast(all_keywords)
+
+        # Step 4: Score keywords (includes hyper-niche variations)
         all_keywords = await self._score_keywords(all_keywords, company_info)
         logger.info(f"Scored {len(all_keywords)} keywords")
 
@@ -406,10 +439,11 @@ class KeywordGenerator:
             return {}, []
         
         try:
-            # Get SERP analyzer
+            # Get SERP analyzer (Gemini native by default)
             analyzer = _get_serp_analyzer(
                 language=config.language[:2] if len(config.language) > 2 else config.language,
                 country=config.region,
+                gemini_api_key=self.gemini_api_key,
             )
             
             # Only analyze top N keywords (SERP calls cost money)
@@ -534,6 +568,226 @@ class KeywordGenerator:
 
         return all_keywords
 
+    def _generate_hyper_niche_variations(
+        self, keywords: list[dict], company_info: CompanyInfo, config: GenerationConfig
+    ) -> list[dict]:
+        """
+        Generate hyper-niche LONG-TAIL keyword variations with geo/industry targeting.
+        
+        Emphasizes LONG-TAIL keywords (4+ words) with multiple modifiers:
+        - Geographic: "best [product] [country]"
+        - Industry: "best [product] for [industry]"
+        - Company size: "best [product] for [size]"
+        - Use cases: "how to use [product] for [use case]"
+        - Questions: "what is [product] for [industry]"
+        - Combined: Multiple modifiers for maximum specificity
+        """
+        variations = []
+        
+        # Extract products/services for targeting
+        products = company_info.products or []
+        services = company_info.services or []
+        all_offerings = products + services
+        
+        if not all_offerings:
+            return variations
+        
+        # Extract industry (clean to 2 words max)
+        industry = None
+        if company_info.industry:
+            industry_words = company_info.industry.split()[:2]
+            industry = " ".join(industry_words).lower()
+        
+        # Extract company size from target_audience
+        company_size = None
+        if company_info.target_audience:
+            audience_lower = company_info.target_audience.lower()
+            if any(x in audience_lower for x in ["small business", "smb", "sme", "startup"]):
+                company_size = "small businesses"
+            elif any(x in audience_lower for x in ["mid-size", "mid-market", "50-500", "100-500"]):
+                company_size = "mid-size companies"
+            elif any(x in audience_lower for x in ["enterprise", "500+", "fortune 500", "large"]):
+                company_size = "enterprise"
+        
+        # Extract use cases (for long-tail variations)
+        use_cases = company_info.use_cases or []
+        pain_points = company_info.pain_points or []
+        
+        # Determine if we should add geo modifier (skip for US/global)
+        use_geo = False
+        geo_suffix = ""
+        if company_info.target_location:
+            location_lower = company_info.target_location.lower()
+            if not any(x in location_lower for x in ["us", "united states", "usa", "global", "worldwide"]):
+                geo_suffix = f" {company_info.target_location}"
+                use_geo = True
+        
+        # Generate LONG-TAIL variations for ALL products/services (not just top 3)
+        for offering in all_offerings[:5]:  # Increased from 3 to 5
+            # Clean offering name (max 4 words)
+            offering_words = offering.split()[:4]
+            clean_offering = " ".join(offering_words).lower()
+            
+            if len(clean_offering) > 50:
+                continue
+            
+            # ===== LONG-TAIL QUESTION VARIATIONS (4+ words) =====
+            question_patterns = []
+            if industry:
+                question_patterns.extend([
+                    f"what is {clean_offering} for {industry}",
+                    f"how does {clean_offering} work for {industry}",
+                    f"why use {clean_offering} for {industry}",
+                ])
+            if company_size:
+                question_patterns.extend([
+                    f"what is {clean_offering} for {company_size}",
+                    f"how to use {clean_offering} for {company_size}",
+                ])
+            if use_geo:
+                question_patterns.extend([
+                    f"what is {clean_offering}{geo_suffix}",
+                    f"how to use {clean_offering}{geo_suffix}",
+                ])
+            # Combined question patterns (longest = most niche)
+            if industry and use_geo:
+                question_patterns.extend([
+                    f"what is {clean_offering} for {industry}{geo_suffix}",
+                    f"how to use {clean_offering} for {industry}{geo_suffix}",
+                ])
+            if industry and company_size:
+                question_patterns.extend([
+                    f"what is {clean_offering} for {industry} {company_size}",
+                    f"how to use {clean_offering} for {industry} {company_size}",
+                ])
+            if industry and company_size and use_geo:
+                question_patterns.append(
+                    f"what is {clean_offering} for {industry} {company_size}{geo_suffix}"
+                )
+            
+            for pattern in question_patterns:
+                if len(pattern.split()) >= 4 and len(pattern) <= 80:  # Long-tail: 4+ words
+                    variations.append({
+                        "keyword": pattern,
+                        "intent": "question",
+                        "score": 95,  # High score for long-tail questions
+                        "source": "hyper_niche_question",
+                        "is_question": True,
+                    })
+            
+            # ===== LONG-TAIL COMMERCIAL VARIATIONS (4+ words) =====
+            # Base long-tail patterns
+            long_tail_patterns = [
+                f"best {clean_offering} for {industry}" if industry else None,
+                f"best {clean_offering} for {company_size}" if company_size else None,
+                f"best {clean_offering}{geo_suffix}" if use_geo else None,
+            ]
+            
+            # Combined long-tail patterns (multiple modifiers = more niche)
+            if industry and use_geo:
+                long_tail_patterns.extend([
+                    f"best {clean_offering} for {industry}{geo_suffix}",
+                    f"top {clean_offering} for {industry}{geo_suffix}",
+                    f"{clean_offering} for {industry}{geo_suffix}",
+                ])
+            if industry and company_size:
+                long_tail_patterns.extend([
+                    f"best {clean_offering} for {industry} {company_size}",
+                    f"top {clean_offering} for {industry} {company_size}",
+                ])
+            if company_size and use_geo:
+                long_tail_patterns.extend([
+                    f"best {clean_offering} for {company_size}{geo_suffix}",
+                ])
+            if industry and company_size and use_geo:
+                long_tail_patterns.extend([
+                    f"best {clean_offering} for {industry} {company_size}{geo_suffix}",
+                    f"top {clean_offering} for {industry} {company_size}{geo_suffix}",
+                ])
+            
+            # Use case specific long-tail
+            for use_case in use_cases[:2]:  # Top 2 use cases
+                use_case_clean = " ".join(use_case.split()[:3]).lower()  # Max 3 words
+                if len(use_case_clean) > 30:
+                    continue
+                long_tail_patterns.extend([
+                    f"best {clean_offering} for {use_case_clean}",
+                    f"how to use {clean_offering} for {use_case_clean}",
+                ])
+                if industry:
+                    long_tail_patterns.append(
+                        f"best {clean_offering} for {use_case_clean} in {industry}"
+                    )
+                if use_geo:
+                    long_tail_patterns.append(
+                        f"best {clean_offering} for {use_case_clean}{geo_suffix}"
+                    )
+            
+            # Pain point specific long-tail
+            for pain in pain_points[:2]:  # Top 2 pain points
+                pain_clean = " ".join(pain.split()[:3]).lower()  # Max 3 words
+                if len(pain_clean) > 30:
+                    continue
+                long_tail_patterns.extend([
+                    f"{clean_offering} to solve {pain_clean}",
+                    f"how {clean_offering} solves {pain_clean}",
+                ])
+            
+            for pattern in long_tail_patterns:
+                if pattern and len(pattern.split()) >= 4 and len(pattern) <= 80:
+                    variations.append({
+                        "keyword": pattern,
+                        "intent": "commercial",
+                        "score": 93,  # High score for long-tail commercial
+                        "source": "hyper_niche_longtail",
+                    })
+            
+            # ===== TRANSACTIONAL LONG-TAIL (4+ words) =====
+            transactional_patterns = []
+            if industry:
+                transactional_patterns.extend([
+                    f"buy {clean_offering} for {industry}",
+                    f"get {clean_offering} for {industry}",
+                    f"order {clean_offering} for {industry}",
+                ])
+            if company_size:
+                transactional_patterns.extend([
+                    f"buy {clean_offering} for {company_size}",
+                    f"get {clean_offering} for {company_size}",
+                ])
+            if use_geo:
+                transactional_patterns.extend([
+                    f"buy {clean_offering}{geo_suffix}",
+                    f"get {clean_offering}{geo_suffix}",
+                ])
+            if industry and use_geo:
+                transactional_patterns.extend([
+                    f"buy {clean_offering} for {industry}{geo_suffix}",
+                    f"get {clean_offering} for {industry}{geo_suffix}",
+                ])
+            if industry and company_size:
+                transactional_patterns.extend([
+                    f"buy {clean_offering} for {industry} {company_size}",
+                ])
+            
+            for pattern in transactional_patterns:
+                if len(pattern.split()) >= 4 and len(pattern) <= 80:
+                    variations.append({
+                        "keyword": pattern,
+                        "intent": "transactional",
+                        "score": 94,
+                        "source": "hyper_niche_transactional",
+                    })
+        
+        # Filter to only long-tail (4+ words) for maximum niche targeting
+        long_tail_variations = [
+            v for v in variations 
+            if len(v["keyword"].split()) >= 4
+        ]
+        
+        logger.info(f"🔍 Generated {len(long_tail_variations)} hyper-niche LONG-TAIL variations (4+ words)")
+        return long_tail_variations
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def _generate_batch(
         self,
@@ -551,8 +805,15 @@ class KeywordGenerator:
         transactional_min = max(2, int(batch_count * 0.15))
         comparison_min = max(1, int(batch_count * 0.10))
 
+        # Get current date for context
+        from datetime import datetime
+        current_date = datetime.now().strftime("%B %Y")  # e.g., "December 2025"
+        current_year = datetime.now().year
+
         # Dynamic language handling - no hardcoded lists
-        prompt = f"""Generate {batch_count} SEO keywords in {language.upper()} language for the {region.upper()} market.
+        prompt = f"""Today's date: {current_date}
+
+Generate {batch_count} SEO keywords in {language.upper()} language for the {region.upper()} market.
 
 {company_context}
 
@@ -563,17 +824,26 @@ INTENT TYPES (strict counts):
 - {commercial_min}+ COMMERCIAL: keywords with commercial intent (best, top, review, pricing, cost, etc.)
 - Rest INFORMATIONAL (max 25%): guides, benefits, tips
 
-KEYWORD LENGTH:
-- 20% SHORT keywords (2-3 words)
-- 50% MEDIUM keywords (4-5 words)
-- 30% LONG keywords (6-7 words)
+KEYWORD LENGTH (EMPHASIZE LONG-TAIL):
+- 0% SHORT keywords (2-3 words) - SKIP THESE
+- 30% MEDIUM keywords (4-5 words)
+- 70% LONG keywords (6-8 words) - PRIORITIZE THESE
+- Prefer 6-8 word keywords for maximum specificity and niche targeting
 
 RULES:
 - ALL keywords must be in {language.upper()} language
 - NO single-word keywords
-- NO keywords longer than 7 words
-- Be specific to company offerings
-- Include location terms relevant to {region.upper()} market
+- MINIMUM 4 words per keyword (LONG-TAIL FOCUS)
+- PREFER 6-8 word keywords for maximum niche targeting
+- Be EXTREMELY specific to company offerings
+- Include HYPER-LOCAL variations with:
+  * Location-specific terms for {region.upper()} market (cities, regions, neighborhoods)
+  * Language/market-specific phrasing for {language.upper()} speakers
+  * Local competitors, brands, or terminology
+  * Regional variations and dialects
+- Include current year ({current_year}) in date-specific keywords
+- Examples of hyper-local LONG-TAIL: "[service] in [city] for [industry] {current_year}" (6+ words), "[service] for [language] speakers in [region] vs [competitor]" (7+ words)
+- LONG-TAIL = MORE SPECIFIC = BETTER TARGETING
 
 Return JSON: {{"keywords": [{{"keyword": "...", "intent": "question|transactional|comparison|commercial|informational", "is_question": true/false}}]}}"""
 

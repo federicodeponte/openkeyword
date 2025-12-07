@@ -19,6 +19,16 @@ class CompanyInfo(BaseModel):
     target_location: Optional[str] = Field(default=None, description="Target location/region")
     target_audience: Optional[str] = Field(default=None, description="Target audience")
     competitors: list[str] = Field(default_factory=list, description="Competitor URLs")
+    
+    # Rich context from company analysis (optional)
+    pain_points: list[str] = Field(default_factory=list, description="Customer pain points and frustrations")
+    customer_problems: list[str] = Field(default_factory=list, description="Problems the solution addresses")
+    use_cases: list[str] = Field(default_factory=list, description="Real scenarios where product is used")
+    value_propositions: list[str] = Field(default_factory=list, description="Key value propositions")
+    differentiators: list[str] = Field(default_factory=list, description="What makes them unique vs competitors")
+    key_features: list[str] = Field(default_factory=list, description="Technical capabilities and features")
+    solution_keywords: list[str] = Field(default_factory=list, description="Terms describing their approach")
+    brand_voice: Optional[str] = Field(default=None, description="Brand communication style")
 
 
 class GenerationConfig(BaseModel):

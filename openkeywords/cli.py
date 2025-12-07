@@ -40,8 +40,9 @@ def main():
 
 
 @main.command()
-@click.option("--company", "-c", required=True, help="Company name")
+@click.option("--company", "-c", default=None, help="Company name (or auto-detect from --url with --analyze-first)")
 @click.option("--url", "-u", default="", help="Company website URL")
+@click.option("--analyze-first", is_flag=True, help="Analyze company website first for rich context (requires --url)")
 @click.option("--industry", "-i", default=None, help="Industry category")
 @click.option("--description", "-d", default=None, help="Company description")
 @click.option("--services", "-s", default=None, help="Services (comma-separated)")
@@ -65,6 +66,7 @@ def main():
 def generate(
     company: str,
     url: str,
+    analyze_first: bool,
     industry: str,
     description: str,
     services: str,
@@ -91,11 +93,15 @@ def generate(
 
     Examples:
 
+        # Manual mode (you provide all details)
         openkeywords generate --company "Acme Software" --industry "B2B SaaS"
 
         openkeywords generate -c "Acme" -s "project management,collaboration" -n 100
 
-        openkeywords generate -c "Acme" --with-research --output keywords.csv
+        # Auto-analyze mode (extracts details from website)
+        openkeywords generate --url "https://valoon.chat" --analyze-first -n 100
+
+        openkeywords generate --url "https://acme.com" --analyze-first --with-research
     """
     setup_logging(verbose)
 
@@ -105,6 +111,108 @@ def generate(
         console.print("Set it with: export GEMINI_API_KEY='your-key'")
         sys.exit(1)
 
+    # Check analyze-first requirements
+    if analyze_first and not url:
+        console.print("[red]Error: --url required when using --analyze-first[/red]")
+        sys.exit(1)
+
+    # Optional: Auto-analyze company website first
+    if analyze_first and url:
+        console.print(f"\n[bold magenta]🔍 Analyzing company website: {url}[/bold magenta]")
+        console.print("[dim]This will extract products, pain points, differentiators, etc.[/dim]\n")
+        
+        try:
+            from .company_analyzer import analyze_company
+            
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                console=console,
+            ) as progress:
+                task = progress.add_task("Analyzing website...", total=None)
+                
+                async def run_analysis():
+                    return await analyze_company(url)
+                
+                analysis = asyncio.run(run_analysis())
+            
+            console.print(f"[green]✓[/green] Analysis complete!")
+            console.print(f"[dim]Company: {analysis.get('company_name', 'Unknown')}[/dim]")
+            console.print(f"[dim]Industry: {analysis.get('industry', 'Unknown')}[/dim]")
+            console.print(f"[dim]Products: {len(analysis.get('products', []))} found[/dim]")
+            console.print(f"[dim]Pain points: {len(analysis.get('pain_points', []))} found[/dim]")
+            console.print(f"[dim]Competitors: {len(analysis.get('competitors', []))} found[/dim]\n")
+            
+            # Use analysis results (override command-line params)
+            company = company or analysis.get('company_name', 'Unknown')
+            industry = industry or analysis.get('industry')
+            description = description or analysis.get('description')
+            
+            # Extract products and services from analysis
+            analyzed_products = analysis.get('products', [])
+            analyzed_services = analysis.get('services', [])
+            
+            # Merge with command-line params (command-line takes precedence)
+            if products:
+                analyzed_products = products.split(",")
+            if services:
+                analyzed_services = services.split(",")
+            
+            # Extract target audience
+            target_audiences = analysis.get('target_audience', [])
+            if not audience and target_audiences:
+                audience = ", ".join(target_audiences)
+            
+            # Extract competitors
+            analyzed_competitors = [c for c in analysis.get('competitors', [])]
+            if competitors:
+                analyzed_competitors = competitors.split(",")
+            
+            # Build rich company info from analysis
+            company_info = CompanyInfo(
+                name=company,
+                url=url,
+                industry=industry,
+                description=description,
+                products=analyzed_products,
+                services=analyzed_services,
+                target_audience=audience,
+                target_location=location,
+                competitors=analyzed_competitors,
+                # Rich context from analysis
+                pain_points=analysis.get('pain_points', []),
+                customer_problems=analysis.get('customer_problems', []),
+                use_cases=analysis.get('use_cases', []),
+                value_propositions=analysis.get('value_propositions', []),
+                differentiators=analysis.get('differentiators', []),
+                key_features=analysis.get('key_features', []),
+                solution_keywords=analysis.get('solution_keywords', []),
+                brand_voice=analysis.get('brand_voice'),
+            )
+            
+        except Exception as e:
+            console.print(f"[red]Error analyzing website: {e}[/red]")
+            console.print("[yellow]Falling back to manual mode with provided parameters...[/yellow]\n")
+            analyze_first = False
+    
+    # Manual mode: Build company info from command-line params
+    if not analyze_first:
+        if not company:
+            console.print("[red]Error: --company required in manual mode (or use --url --analyze-first)[/red]")
+            sys.exit(1)
+        
+        company_info = CompanyInfo(
+            name=company,
+            url=url,
+            industry=industry,
+            description=description,
+            services=services.split(",") if services else [],
+            products=products.split(",") if products else [],
+            target_audience=audience,
+            target_location=location,
+            competitors=competitors.split(",") if competitors else [],
+        )
+
     if with_gaps and not os.getenv("SERANKING_API_KEY"):
         console.print("[yellow]Warning: SERANKING_API_KEY not set - gap analysis will be skipped[/yellow]")
         with_gaps = False
@@ -112,19 +220,6 @@ def generate(
     if with_gaps and not url:
         console.print("[yellow]Warning: --url required for gap analysis - skipping[/yellow]")
         with_gaps = False
-
-    # Build company info
-    company_info = CompanyInfo(
-        name=company,
-        url=url,
-        industry=industry,
-        description=description,
-        services=services.split(",") if services else [],
-        products=products.split(",") if products else [],
-        target_audience=audience,
-        target_location=location,
-        competitors=competitors.split(",") if competitors else [],
-    )
 
     # Build config
     config = GenerationConfig(
@@ -142,7 +237,9 @@ def generate(
     )
 
     console.print(f"\n[bold blue]🔑 OpenKeywords[/bold blue]")
-    console.print(f"Generating {count} keywords for [green]{company}[/green]")
+    console.print(f"Generating {count} keywords for [green]{company_info.name}[/green]")
+    if analyze_first:
+        console.print("[bold magenta]🧠 Using rich company analysis (products, pain points, differentiators)[/bold magenta]")
     if research_focus:
         console.print("[bold red]🎯 RESEARCH FOCUS MODE: 70%+ research, 4+ words, strict filtering[/bold red]")
     elif with_research:

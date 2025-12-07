@@ -48,7 +48,7 @@ class ResearchEngine:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-2.0-flash",
+        model: str = "gemini-3-pro-preview",
     ):
         """
         Initialize the research engine.
@@ -161,7 +161,14 @@ class ResearchEngine:
         """Search Reddit for real user keywords and questions."""
         services_str = ", ".join(services[:3]) if services else industry
 
-        prompt = f"""You are a keyword researcher. Search Reddit for REAL discussions about {industry}.
+        # Get current date
+        from datetime import datetime
+        current_date = datetime.now().strftime("%B %Y")
+        current_year = datetime.now().year
+
+        prompt = f"""Today's date: {current_date}
+
+You are a keyword researcher. Search Reddit for REAL discussions about {industry}.
 
 Search for: "{industry} site:reddit.com" and "{services_str} site:reddit.com"
 
@@ -171,15 +178,19 @@ Find {target_count} unique keywords/phrases that REAL USERS use when discussing:
 - Solutions they're looking for
 - Specific terminology and jargon
 - Pain points and frustrations
+- HYPER-LOCAL queries (city-specific, region-specific, language-specific)
 
 Focus on:
 - Long-tail keywords (4-7 words)
 - Question-based keywords (how, what, why, can I, should I)
 - Problem-based keywords (problem with, issue, help with, struggling with)
 - Comparison keywords (vs, versus, alternative to, better than)
+- Location-specific keywords (in [city], near me, [region] specific)
+- Include current year {current_year} for time-sensitive queries
 
 IMPORTANT: Find NICHE keywords that typical AI keyword generators would miss.
 Look for the SPECIFIC language and terminology Reddit users actually use.
+Include HYPER-LOCAL variations (cities, neighborhoods, regional terms).
 
 Output JSON:
 {{"keywords": [
@@ -199,7 +210,14 @@ Output JSON:
         """Search Quora and People Also Ask for real questions."""
         services_str = ", ".join(services[:3]) if services else industry
 
-        prompt = f"""You are a keyword researcher. Search for REAL QUESTIONS people ask about {industry}.
+        # Get current date
+        from datetime import datetime
+        current_date = datetime.now().strftime("%B %Y")
+        current_year = datetime.now().year
+
+        prompt = f"""Today's date: {current_date}
+
+You are a keyword researcher. Search for REAL QUESTIONS people ask about {industry}.
 
 Search: "{industry} site:quora.com" and "people also ask {services_str}"
 
@@ -208,15 +226,19 @@ Find {target_count} unique QUESTION keywords that real users ask about:
 - Problems in {industry}
 - Buying decisions
 - Comparisons and alternatives
+- HYPER-LOCAL questions (location-specific, market-specific)
 
 Focus on:
 - Complete question phrases (how do I, what is the best, why does)
 - Specific problem questions (why won't, how to fix, what to do when)
 - Decision questions (should I, is it worth, which is better)
 - "People Also Ask" style questions
+- Location-specific questions (in [city], for [region], [language] speakers)
+- Include current year {current_year} for time-sensitive questions
 
 These should be REAL questions from Quora, forums, and Google PAA.
 Find questions that typical AI generators would miss.
+Include HYPER-LOCAL variations (cities, regions, languages).
 
 Output JSON:
 {{"keywords": [
