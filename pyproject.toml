@@ -4,24 +4,27 @@ build-backend = "hatchling.build"
 
 [project]
 name = "openkeywords"
-version = "0.1.0"
-description = "AI-powered SEO keyword generation using Gemini + SE Ranking"
+version = "1.0.0"
+description = "AI-powered SEO keyword research with Google Gemini - Deep research, SERP analysis, competitor gaps"
 readme = "README.md"
 license = "MIT"
 authors = [
     { name = "SCAILE Technologies", email = "hello@scaile.tech" }
 ]
-keywords = ["seo", "keywords", "ai", "gemini", "content-marketing"]
+keywords = ["seo", "keywords", "ai", "gemini", "content-marketing", "keyword-research", "serp", "dataforseo", "content-strategy"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Internet :: WWW/HTTP :: Indexing/Search",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
 ]
 requires-python = ">=3.10"
 dependencies = [
@@ -49,9 +52,12 @@ test = [
 openkeywords = "openkeywords.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/scaile/openkeywords"
-Documentation = "https://github.com/scaile/openkeywords"
-Repository = "https://github.com/scaile/openkeywords"
+Homepage = "https://github.com/federicodeponte/openkeyword"
+Documentation = "https://github.com/federicodeponte/openkeyword#readme"
+Repository = "https://github.com/federicodeponte/openkeyword"
+"Bug Tracker" = "https://github.com/federicodeponte/openkeyword/issues"
+Changelog = "https://github.com/federicodeponte/openkeyword/blob/main/CHANGELOG.md"
+Website = "https://scaile.tech"
 
 [tool.hatch.build.targets.wheel]
 packages = ["openkeywords"]
