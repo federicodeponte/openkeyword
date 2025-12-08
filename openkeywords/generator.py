@@ -1155,7 +1155,9 @@ RULES:
 - NO single-word keywords
 - MINIMUM 4 words per keyword (LONG-TAIL FOCUS)
 - PREFER 6-8 word keywords for maximum niche targeting
-- Be EXTREMELY specific to company offerings
+- Use NATURAL SEARCHER LANGUAGE (how real users search), NOT company product names
+- Keywords should solve problems or answer questions, not list products
+- Focus on BENEFITS, SOLUTIONS, and USE CASES, not product names
 - Include HYPER-LOCAL variations with:
   * Location-specific terms for {region.upper()} market (cities, regions, neighborhoods)
   * Language/market-specific phrasing for {language.upper()} speakers
