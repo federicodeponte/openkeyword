@@ -171,18 +171,41 @@ async def test():
         print(f"🎯 Hyper-niche keywords: {len(hyper_niche_keywords)}/{len(keywords)} ({len(hyper_niche_keywords)/len(keywords)*100:.0f}%)")
         print()
         
-        # Show examples
+        # Show ALL keywords
+        print("=" * 80)
+        print(f"📝 ALL {len(keywords)} KEYWORDS:")
+        print("=" * 80)
+        print()
+        
+        for i, kw in enumerate(keywords, 1):
+            word_count = len(kw.keyword.split())
+            kw_lower = kw.keyword.lower()
+            
+            # Check modifiers
+            modifiers = []
+            if any(x in kw_lower for x in ["startup", "sme", "enterprise", "small business", "mid-size"]):
+                modifiers.append("SIZE")
+            if any(x in kw_lower for x in ["germany", "uk", "europe", "us", "berlin", "london", "dach"]):
+                modifiers.append("GEO")
+            if any(x in kw_lower for x in ["saas", "b2b", "fintech", "martech", "cybersecurity", "ecommerce"]):
+                modifiers.append("INDUSTRY")
+            
+            modifier_str = f" [{', '.join(modifiers)}]" if modifiers else ""
+            is_product = "⚠️ " if kw in product_keywords else "✅ "
+            
+            print(f"{is_product}{i:2d}. {kw.keyword}")
+            print(f"      Intent: {kw.intent} | Score: {kw.score}/100 | Words: {word_count}{modifier_str}")
+            print()
+        
+        # Show natural examples
         if natural_keywords:
-            print("✅ NATURAL KEYWORDS (Good):")
+            print("=" * 80)
+            print("✅ NATURAL KEYWORD EXAMPLES:")
+            print("=" * 80)
+            print()
             for i, kw in enumerate(natural_keywords[:5], 1):
                 word_count = len(kw.keyword.split())
                 print(f"   {i}. {kw.keyword} ({word_count} words, {kw.intent})")
-            print()
-        
-        if product_keywords:
-            print("⚠️  PRODUCT-NAME KEYWORDS (Should be minimal):")
-            for i, kw in enumerate(product_keywords[:3], 1):
-                print(f"   {i}. {kw.keyword}")
             print()
         
         if hyper_niche_keywords:
