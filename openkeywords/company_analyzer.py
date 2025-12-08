@@ -167,47 +167,29 @@ class CompanyAnalyzer:
 
 Analyze the company at {website_url}
 
-CRITICAL INSTRUCTIONS:
-- Extract SPECIFIC, CONCRETE information, NOT generic descriptions
-- Use EXACT product names, feature names, and terminology from their website
-- Capture their UNIQUE differentiators, not generic industry benefits
-- Extract REAL customer pain points they mention, not assumed ones
-- Use their ACTUAL brand voice and terminology
+STEP 1: Read the website using URL context
+- Use the URL context tool to read {website_url}
+- Extract information directly from the homepage, about page, services/products pages
+- Pay attention to what they actually SELL, their value proposition, target customers
 
-STEP 1: Read the website deeply using URL context
-- Use the URL context tool to thoroughly read {website_url}
-- Read homepage, about page, products/services pages, case studies, blog
-- Extract SPECIFIC product names, feature names, pricing plans
-- Note EXACT terminology they use (not your interpretation)
-- Capture their unique positioning and differentiators
+STEP 2: Search Google for additional context
+- Search: "{website_url} products services"
+- Search: "{website_url} customers reviews pain points"
+- Search: "{website_url} vs competitors"
+- Find customer problems, use cases, differentiators
 
-STEP 2: Search Google for deeper context
-- Search: "{website_url} products features pricing"
-- Search: "{website_url} customers case studies testimonials"
-- Search: "{website_url} vs competitors comparison"
-- Search: "what is [company name] used for"
-- Find real customer use cases, specific pain points mentioned, competitive positioning
+STEP 3: Provide comprehensive company analysis
 
-STEP 3: Provide hyper-specific company analysis
+Focus on extracting SPECIFIC information:
+- What do they SELL? (products/services) - Use their actual product/service names
+- What problems do they SOLVE? (pain points/customer problems)
+- What makes them UNIQUE? (differentiators/value props)
+- Who are their CUSTOMERS? (target audience)
+- Who are their COMPETITORS?
+- What is their BRAND VOICE? (formal/casual, technical/simple)
+- What INDUSTRY are they in? (be specific!)
 
-REQUIRED SPECIFICITY LEVEL:
-✅ GOOD: "AEO content production service" (mentions specific service)
-✅ GOOD: "Shadow Demand Discovery Platform" (exact product name)
-✅ GOOD: "Weekly AI Visibility Reports" (specific deliverable)
-✅ GOOD: "Lack of visibility in AI search engines like ChatGPT and Perplexity" (specific pain point)
-
-❌ BAD: "AI visibility reporting" (too generic)
-❌ BAD: "Content production" (too broad)
-❌ BAD: "Marketing services" (too vague)
-
-Extract:
-- PRODUCTS: Exact product names, SKUs, plans (e.g., "AEO Foundation Plan", not "subscription service")
-- SERVICES: Specific service offerings with their names (e.g., "Weekly AI Visibility Report", not "reporting")
-- PAIN POINTS: Exact problems customers mention (e.g., "Our content doesn't appear in ChatGPT answers", not "low visibility")
-- USE CASES: Real scenarios with details (e.g., "B2B SaaS companies tracking AI search visibility", not "visibility tracking")
-- DIFFERENTIATORS: Concrete unique features (e.g., "Only platform tracking citations in 5 AI engines", not "AI tracking")
-- COMPETITORS: Specific company names or product names
-- SOLUTION KEYWORDS: Their exact terminology and buzzwords (e.g., "Shadow Demand Discovery", not "demand analysis")
+Be thorough and specific. Use real information from the website and search results.
 
 Return JSON matching this schema:
 {json.dumps(COMPANY_ANALYSIS_SCHEMA, indent=2)}"""
