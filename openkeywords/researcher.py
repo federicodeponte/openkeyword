@@ -22,6 +22,36 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
+# Response schema for structured research output
+RESEARCH_KEYWORD_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "keywords": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string", "description": "The exact keyword/phrase"},
+                    "intent": {"type": "string", "enum": ["question", "commercial", "informational", "transactional", "comparison"]},
+                    "source": {"type": "string", "description": "Platform where found (reddit, quora, forum)"},
+                    "url": {"type": "string", "description": "Full URL to the discussion/thread"},
+                    "quote": {"type": "string", "description": "Actual quote from the discussion"},
+                    "source_title": {"type": "string", "description": "Thread/question title"},
+                    "source_author": {"type": "string", "description": "Username/author"},
+                    "source_date": {"type": "string", "description": "ISO date when posted"},
+                    "subreddit": {"type": "string", "description": "Subreddit name (for Reddit)"},
+                    "upvotes": {"type": "integer", "description": "Upvotes/likes count"},
+                    "comments_count": {"type": "integer", "description": "Number of comments"},
+                    "pain_point_extracted": {"type": "string", "description": "What problem they're facing"},
+                    "sentiment": {"type": "string", "enum": ["positive", "negative", "neutral"]},
+                },
+                "required": ["keyword", "intent", "source"]
+            }
+        }
+    },
+    "required": ["keywords"]
+}
+
 # Community sources to prioritize for keyword discovery
 RESEARCH_SOURCES = [
     "site:reddit.com",
@@ -192,9 +222,38 @@ IMPORTANT: Find NICHE keywords that typical AI keyword generators would miss.
 Look for the SPECIFIC language and terminology Reddit users actually use.
 Include HYPER-LOCAL variations (cities, neighborhoods, regional terms).
 
+For EACH keyword found, provide:
+- The exact keyword/phrase
+- Intent type
+- URL to the Reddit post/thread
+- Actual quote from the discussion (what the user said)
+- Thread title
+- Author username (if available)
+- Subreddit name
+- Upvotes count (if available)
+- Comments count (if available)
+- Date posted (if available)
+- Extracted pain point (what problem they're facing)
+- Sentiment (positive/negative/neutral)
+
 Output JSON:
 {{"keywords": [
-  {{"keyword": "exact phrase from reddit", "intent": "question|commercial|informational|transactional|comparison", "source": "reddit", "context": "brief context where found"}}
+  {{
+    "keyword": "exact phrase from reddit",
+    "intent": "question|commercial|informational|transactional|comparison",
+    "source": "reddit",
+    "url": "https://reddit.com/r/subreddit/comments/...",
+    "quote": "actual quote from the discussion",
+    "source_title": "thread title",
+    "source_author": "username",
+    "source_date": "2024-11-15T14:32:00Z",
+    "subreddit": "r/subreddit",
+    "upvotes": 247,
+    "comments_count": 89,
+    "pain_point_extracted": "what problem they're facing",
+    "sentiment": "positive|negative|neutral",
+    "context": "brief context where found"
+  }}
 ]}}"""
 
         return await self._execute_grounded_research(prompt, "reddit")
@@ -240,9 +299,33 @@ These should be REAL questions from Quora, forums, and Google PAA.
 Find questions that typical AI generators would miss.
 Include HYPER-LOCAL variations (cities, regions, languages).
 
+For EACH question found, provide:
+- The exact question
+- URL to the Quora question or PAA source
+- Actual answer snippet or discussion quote
+- Question title
+- Author name (if available)
+- Views count (if available)
+- Date posted (if available)
+- Extracted pain point
+- Sentiment
+
 Output JSON:
 {{"keywords": [
-  {{"keyword": "exact question from research", "intent": "question", "source": "quora_paa", "context": "where found"}}
+  {{
+    "keyword": "exact question from research",
+    "intent": "question",
+    "source": "quora_paa",
+    "url": "https://quora.com/...",
+    "quote": "actual answer or discussion quote",
+    "source_title": "question title",
+    "source_author": "author name",
+    "source_date": "2024-10-22T09:15:00Z",
+    "views": 12400,
+    "pain_point_extracted": "what problem they're asking about",
+    "sentiment": "positive|negative|neutral",
+    "context": "where found"
+  }}
 ]}}"""
 
         return await self._execute_grounded_research(prompt, "quora_paa")
@@ -281,9 +364,34 @@ Focus on:
 
 Find the EXACT terminology and phrases professionals use.
 
+For EACH niche term found, provide:
+- The exact niche keyword
+- Intent type
+- URL to the forum/blog post
+- Actual quote or snippet
+- Post title
+- Author (if available)
+- Forum/platform name
+- Date (if available)
+- Extracted use case or context
+- Sentiment
+
 Output JSON:
 {{"keywords": [
-  {{"keyword": "niche term found", "intent": "commercial|informational|transactional", "source": "niche_research", "context": "context"}}
+  {{
+    "keyword": "niche term found",
+    "intent": "commercial|informational|transactional",
+    "source": "niche_research",
+    "url": "https://forum.com/...",
+    "quote": "actual quote or snippet",
+    "source_title": "post title",
+    "source_author": "author",
+    "source_date": "2024-12-01T16:45:00Z",
+    "topic_category": "forum category",
+    "pain_point_extracted": "use case or context",
+    "sentiment": "positive|negative|neutral",
+    "context": "context"
+  }}
 ]}}"""
 
         return await self._execute_grounded_research(prompt, "niche_research")
@@ -303,6 +411,7 @@ Output JSON:
         """Execute research with Google Search grounding (new SDK)."""
         try:
             # Use Google Search tool for grounded research
+            # CRITICAL: Use response_schema to enforce structured output
             response = await asyncio.to_thread(
                 self.client.models.generate_content,
                 model=self.model_name,
@@ -310,6 +419,8 @@ Output JSON:
                 config=self.types.GenerateContentConfig(
                     tools=[self.types.Tool(google_search=self.types.GoogleSearch())],
                     temperature=0.5,
+                    response_mime_type="application/json",
+                    response_schema=RESEARCH_KEYWORD_SCHEMA,
                 ),
             )
 
@@ -317,13 +428,32 @@ Output JSON:
             response_text = response.text
             keywords = self._parse_keywords_response(response_text)
 
-            # Log grounding info if available
+            # Extract grounding metadata for URLs and citations
+            grounding_urls = []
             if hasattr(response, 'candidates') and response.candidates:
                 candidate = response.candidates[0]
                 if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
+                    # Extract web search queries
                     queries = getattr(candidate.grounding_metadata, 'web_search_queries', [])
                     if queries:
                         logger.info(f"Search queries used: {queries[:3]}")
+                    
+                    # Extract grounding chunks (contains URLs and citations)
+                    grounding_chunks = getattr(candidate.grounding_metadata, 'grounding_chunks', [])
+                    for chunk in grounding_chunks:
+                        if hasattr(chunk, 'web') and chunk.web:
+                            if hasattr(chunk.web, 'uri'):
+                                grounding_urls.append(chunk.web.uri)
+                            elif hasattr(chunk.web, 'url'):
+                                grounding_urls.append(chunk.web.url)
+            
+            # Enhance keywords with grounding URLs if available
+            if grounding_urls and keywords:
+                # Try to match URLs to keywords (simple heuristic: assign in order)
+                for i, kw in enumerate(keywords):
+                    if i < len(grounding_urls) and not kw.get('url'):
+                        kw['url'] = grounding_urls[i]
+                        logger.debug(f"Assigned grounding URL to keyword: {kw.get('keyword', '')[:50]}")
 
             logger.info(f"Research ({source_type}): found {len(keywords)} keywords")
             return keywords
@@ -347,10 +477,15 @@ Output JSON:
                 "Based on your knowledge, generate realistic keywords as if you searched:"
             )
 
+            # Use the new SDK for fallback too
             response = await asyncio.to_thread(
-                self.model.generate_content,
-                fallback_prompt,
-                generation_config={"temperature": 0.7, "response_mime_type": "application/json"},
+                self.client.models.generate_content,
+                model=self.model_name,
+                contents=fallback_prompt,
+                config=self.types.GenerateContentConfig(
+                    temperature=0.7,
+                    response_mime_type="application/json",
+                ),
             )
 
             keywords = self._parse_keywords_response(response.text)
@@ -385,7 +520,8 @@ Output JSON:
                 # Clean up the keyword
                 keyword_text = re.sub(r'\s+', ' ', keyword_text)  # Normalize whitespace
 
-                valid_keywords.append({
+                # Extract all enhanced fields
+                keyword_dict = {
                     "keyword": keyword_text,
                     "intent": kw.get("intent", "informational"),
                     "source": kw.get("source", "research"),
@@ -394,11 +530,130 @@ Output JSON:
                         ("how", "what", "why", "when", "where", "which", "who", "can", "should", "is", "are", "does", "do")
                     ),
                     "score": 0,  # Will be scored later
-                })
+                    # Enhanced fields
+                    "url": kw.get("url", ""),
+                    "quote": kw.get("quote", ""),
+                    "source_title": kw.get("source_title"),
+                    "source_author": kw.get("source_author"),
+                    "source_date": kw.get("source_date"),
+                    "upvotes": kw.get("upvotes"),
+                    "comments_count": kw.get("comments_count"),
+                    "views": kw.get("views"),
+                    "subreddit": kw.get("subreddit"),
+                    "topic_category": kw.get("topic_category"),
+                    "pain_point_extracted": kw.get("pain_point_extracted"),
+                    "sentiment": kw.get("sentiment"),
+                    "author_karma": kw.get("author_karma"),
+                    "author_verified": kw.get("author_verified"),
+                    "source_authority_score": kw.get("source_authority_score"),
+                }
+                valid_keywords.append(keyword_dict)
 
             return valid_keywords
 
         except (json.JSONDecodeError, KeyError, IndexError) as e:
             logger.error(f"Failed to parse research response: {e}")
             return []
+    
+    def _aggregate_research_data(self, keywords: list[dict]) -> dict:
+        """
+        Aggregate research data by keyword.
+        Groups sources, extracts common pain points, solutions, sentiment.
+        """
+        from collections import defaultdict
+        
+        keyword_sources = defaultdict(list)
+        platforms = set()
+        pain_points = defaultdict(int)
+        solutions = defaultdict(int)
+        sentiment_counts = defaultdict(int)
+        
+        for kw in keywords:
+            keyword = kw.get("keyword", "")
+            if not keyword:
+                continue
+            
+            # Validate URL - must be valid HTTP(S) URL or empty
+            url = kw.get("url", "")
+            if url and not (url.startswith("http://") or url.startswith("https://")):
+                # Invalid URL - set to empty rather than storing invalid value
+                logger.debug(f"Invalid URL for keyword '{keyword}': '{url}' - setting to empty")
+                url = ""
+            
+            # Build ResearchSource-like dict
+            source_dict = {
+                "keyword": keyword,
+                "quote": kw.get("quote", kw.get("context", "")) or "",
+                "url": url,
+                "platform": self._detect_platform(url, kw.get("source", "")),
+                "source_title": kw.get("source_title"),
+                "source_author": kw.get("source_author"),
+                "source_date": kw.get("source_date"),
+                "upvotes": kw.get("upvotes"),
+                "comments_count": kw.get("comments_count"),
+                "views": kw.get("views"),
+                "subreddit": kw.get("subreddit"),
+                "topic_category": kw.get("topic_category"),
+                "pain_point_extracted": kw.get("pain_point_extracted"),
+                "sentiment": kw.get("sentiment"),
+                "author_karma": kw.get("author_karma"),
+                "author_verified": kw.get("author_verified"),
+                "source_authority_score": kw.get("source_authority_score"),
+            }
+            
+            # Only include source if it has quote or URL (minimum data requirement)
+            if not source_dict["quote"] and not source_dict["url"]:
+                continue  # Skip sources with no useful data
+            
+            keyword_sources[keyword].append(source_dict)
+            platform = source_dict["platform"]
+            if platform:
+                platforms.add(platform)
+            
+            if source_dict["pain_point_extracted"]:
+                pain_points[source_dict["pain_point_extracted"]] += 1
+            
+            sentiment = source_dict["sentiment"]
+            if sentiment:
+                sentiment_counts[sentiment] += 1
+        
+        # Build aggregated data
+        aggregated = {}
+        for keyword, sources in keyword_sources.items():
+            # Sort by engagement (upvotes + comments)
+            sources_sorted = sorted(
+                sources,
+                key=lambda s: (s.get("upvotes", 0) or 0) + (s.get("comments_count", 0) or 0),
+                reverse=True
+            )
+            
+            # Extract top pain points for this keyword
+            keyword_pain_points = [
+                s.get("pain_point_extracted") for s in sources 
+                if s.get("pain_point_extracted")
+            ]
+            
+            aggregated[keyword] = {
+                "sources": sources_sorted,
+                "total_sources": len(sources),
+                "platforms": list(platforms),
+                "pain_points": list(set(keyword_pain_points))[:5],  # Top 5 unique
+                "sentiment_breakdown": dict(sentiment_counts),
+            }
+        
+        return aggregated
+    
+    def _detect_platform(self, url: str, source: str) -> str:
+        """Detect platform from URL or source."""
+        url_lower = url.lower()
+        if "reddit.com" in url_lower or source == "reddit" or source == "research_reddit":
+            return "reddit"
+        elif "quora.com" in url_lower or source == "quora" or source == "research_quora":
+            return "quora"
+        elif "indiehackers.com" in url_lower or "hackernews" in url_lower or "hn" in url_lower:
+            return "forum"
+        elif any(domain in url_lower for domain in ["forum", "community", "discussion"]):
+            return "forum"
+        else:
+            return "blog" if url else source
 

@@ -224,9 +224,10 @@ class KeywordGenerator:
                 # Re-dedupe after adding niche variations
                 all_keywords, _ = self._deduplicate_fast(all_keywords)
 
-        # Step 4: Score keywords (includes hyper-niche variations)
+        # Step 4: Score keywords (includes hyper-niche variations, bonus keywords, and gap keywords)
+        # Score ALL keywords for company-fit (including gap keywords)
         all_keywords = await self._score_keywords(all_keywords, company_info)
-        logger.info(f"Scored {len(all_keywords)} keywords")
+        logger.info(f"Scored {len(all_keywords)} keywords (including gap and bonus keywords)")
 
         # Step 5: AI semantic deduplication (removes "sign up X" vs "sign up for X" etc.)
         all_keywords = await self._deduplicate_semantic(all_keywords)
@@ -266,16 +267,26 @@ class KeywordGenerator:
             )
             logger.info(f"🔍 SERP analysis complete. Found {len(bonus_keywords)} bonus keywords from PAA/related")
             
-            # Add bonus keywords (they need scoring and won't have SERP data yet)
+            # Add bonus keywords and score them properly for company-fit
             if bonus_keywords:
                 bonus_kw_dicts = [
                     {"keyword": kw, "intent": "question" if "?" in kw else "informational", 
-                     "score": 60, "source": "serp_paa", "is_question": "?" in kw}
+                     "score": 0, "source": "serp_paa", "is_question": "?" in kw}
                     for kw in bonus_keywords[:config.target_count // 4]  # Limit bonus
                 ]
                 all_keywords.extend(bonus_kw_dicts)
                 # Re-dedupe after adding bonus
                 all_keywords, _ = self._deduplicate_fast(all_keywords)
+                
+                # Score bonus keywords properly for company-fit (they were added after Step 4 scoring)
+                if bonus_kw_dicts:
+                    scored_bonus = await self._score_keywords(bonus_kw_dicts, company_info)
+                    # Update scores in all_keywords
+                    bonus_score_map = {kw["keyword"]: kw["score"] for kw in scored_bonus}
+                    for kw in all_keywords:
+                        if kw.get("source") == "serp_paa" and kw["keyword"] in bonus_score_map:
+                            kw["score"] = bonus_score_map[kw["keyword"]]
+                    logger.info(f"✅ Scored {len(scored_bonus)} bonus keywords for company-fit")
 
         # Step 9: Limit to target count
         all_keywords = all_keywords[: config.target_count]
@@ -290,6 +301,49 @@ class KeywordGenerator:
             )
             logger.info(f"📈 Volume lookup: got data for {len(volume_data)}/{len(all_keywords)} keywords")
 
+        # Step 11: Generate content briefs (if enabled) - PARALLEL for performance
+        content_briefs = {}
+        if config.enable_enhanced_capture and config.enable_content_briefs:
+            # Generate briefs for top keywords
+            top_keywords_for_briefs = all_keywords[:config.content_brief_count]
+            logger.info(f"📝 Generating content briefs for {len(top_keywords_for_briefs)} keywords...")
+            
+            # Generate briefs in parallel for performance
+            brief_tasks = []
+            for kw in top_keywords_for_briefs:
+                kw_text = kw["keyword"]
+                research_data = kw.get("_research_data")
+                serp_analysis = serp_analyses.get(kw_text)
+                serp_data = getattr(serp_analysis, "_complete_serp_data", None) if serp_analysis else None
+                
+                brief_tasks.append(
+                    self._generate_content_brief(
+                        keyword=kw_text,
+                        research_data=research_data,
+                        serp_data=serp_data,
+                        company_info=company_info,
+                    )
+                )
+            
+            # Execute all brief generations in parallel
+            brief_results = await asyncio.gather(*brief_tasks, return_exceptions=True)
+            
+            # Process results
+            for kw, brief_result in zip(top_keywords_for_briefs, brief_results):
+                kw_text = kw["keyword"]
+                if isinstance(brief_result, Exception):
+                    logger.warning(f"Content brief generation failed for '{kw_text}': {brief_result}")
+                elif brief_result:
+                    content_briefs[kw_text] = brief_result
+            
+            logger.info(f"✅ Generated {len(content_briefs)}/{len(top_keywords_for_briefs)} content briefs")
+
+        # Step 12: Generate citations (if enabled)
+        from .citation_generator import CitationGenerator
+        from .models import ResearchData, ResearchSource, ContentBrief, CompleteSERPData, SERPRanking, FeaturedSnippetData, PAAQuestion
+        
+        citation_generator = CitationGenerator()
+
         # Build result with SERP and volume enrichment
         keyword_objects = []
         for kw in all_keywords:
@@ -301,21 +355,194 @@ class KeywordGenerator:
             volume = vol_data.get("volume", 0) if vol_data else kw.get("volume", 0)
             difficulty = vol_data.get("difficulty", 50) if vol_data else kw.get("difficulty", 50)
             
-            keyword_objects.append(Keyword(
-                keyword=kw_text,
-                intent=kw.get("intent", "informational"),
-                score=kw.get("score", 0),
-                cluster_name=kw.get("cluster_name"),
-                is_question=kw.get("is_question", False),
-                volume=volume,
-                difficulty=difficulty,
-                source=kw.get("source", "ai_generated"),
+            # Enhanced data capture
+            research_data_obj = None
+            content_brief_obj = None
+            serp_data_obj = None
+            citations_list = []
+            research_summary = None
+            research_source_urls = []
+            top_ranking_urls = []
+            featured_snippet_url = None
+            paa_questions_with_urls = []
+            
+            if config.enable_enhanced_capture:
+                # Build ResearchData object (only for research-sourced keywords)
+                research_data_dict = kw.get("_research_data")
+                # Only set research_data if keyword is actually research-sourced
+                is_research_sourced = "research" in kw.get("source", "").lower()
+                if research_data_dict and is_research_sourced:
+                    sources = []
+                    for source_dict in research_data_dict.get("sources", [])[:config.research_sources_per_keyword]:
+                        # Validate source_dict before creating ResearchSource
+                        # Ensure required fields exist
+                        if not source_dict.get("quote") and not source_dict.get("url"):
+                            continue  # Skip sources with no quote or URL
+                        
+                        # Ensure URL is valid if present
+                        url = source_dict.get("url", "")
+                        if url and not (url.startswith("http://") or url.startswith("https://")):
+                            source_dict["url"] = ""  # Clear invalid URL
+                        
+                        try:
+                            sources.append(ResearchSource(**source_dict))
+                        except Exception as e:
+                            logger.warning(f"Failed to create ResearchSource for '{kw_text}': {e}")
+                            continue
+                    
+                    research_data_obj = ResearchData(
+                        keyword=kw_text,
+                        sources=sources,
+                        total_sources_found=research_data_dict.get("total_sources", len(sources)),
+                        platforms_searched=research_data_dict.get("platforms", []),
+                        most_mentioned_pain_points=research_data_dict.get("pain_points", []),
+                        common_solutions_mentioned=research_data_dict.get("solutions", []),
+                        sentiment_breakdown=research_data_dict.get("sentiment_breakdown", {}),
+                    )
+                    
+                    # Generate research summary (top 3 quotes)
+                    if sources:
+                        top_quotes = []
+                        for s in sources[:3]:
+                            if s.quote:
+                                platform = s.platform or "source"
+                                quote_short = s.quote[:100] + "..." if len(s.quote) > 100 else s.quote
+                                top_quotes.append(f"{platform}: '{quote_short}'")
+                        research_summary = " | ".join(top_quotes)
+                    
+                    # Extract URLs
+                    research_source_urls = [s.url for s in sources if s.url]
+                
+                # Build ContentBrief object
+                content_brief_dict = content_briefs.get(kw_text)
+                if content_brief_dict:
+                    content_brief_obj = ContentBrief(**content_brief_dict)
+                
+                # Build CompleteSERPData object
+                serp_analysis_obj = serp_analyses.get(kw_text)
+                complete_serp_data_dict = getattr(serp_analysis_obj, "_complete_serp_data", None) if serp_analysis_obj else None
+                if complete_serp_data_dict:
+                    # Convert to Pydantic models
+                    organic_results_objs = []
+                    for result_dict in complete_serp_data_dict.get("organic_results", []):
+                        organic_results_objs.append(SERPRanking(**result_dict))
+                    
+                    featured_snippet_obj = None
+                    if complete_serp_data_dict.get("featured_snippet"):
+                        featured_snippet_obj = FeaturedSnippetData(**complete_serp_data_dict["featured_snippet"])
+                        featured_snippet_url = featured_snippet_obj.source_url
+                    
+                    paa_questions_objs = []
+                    for paa_dict in complete_serp_data_dict.get("paa_questions", []):
+                        paa_questions_objs.append(PAAQuestion(**paa_dict))
+                        paa_questions_with_urls.append({
+                            "question": paa_dict.get("question", ""),
+                            "url": paa_dict.get("source_url", ""),
+                        })
+                    
+                    # Ensure numeric fields are not None
+                    avg_da = complete_serp_data_dict.get("avg_domain_authority")
+                    if avg_da is None:
+                        avg_da = 0.0
+                    
+                    avg_wc = complete_serp_data_dict.get("avg_word_count")
+                    if avg_wc is None:
+                        avg_wc = 0
+                    
+                    big_brands = complete_serp_data_dict.get("big_brands_count")
+                    if big_brands is None:
+                        big_brands = 0
+                    
+                    serp_data_obj = CompleteSERPData(
+                        keyword=kw_text,
+                        search_date=complete_serp_data_dict.get("search_date", ""),
+                        country=complete_serp_data_dict.get("country", config.region),
+                        language=complete_serp_data_dict.get("language", config.language),
+                        organic_results=organic_results_objs,
+                        featured_snippet=featured_snippet_obj,
+                        paa_questions=paa_questions_objs,
+                        related_searches=complete_serp_data_dict.get("related_searches", []),
+                        image_pack_present=complete_serp_data_dict.get("image_pack_present", False),
+                        video_results=complete_serp_data_dict.get("video_results", []),
+                        ads_count=complete_serp_data_dict.get("ads_count", 0),
+                        ads_top_domains=complete_serp_data_dict.get("ads_top_domains", []),
+                        avg_word_count=avg_wc,
+                        common_content_types=complete_serp_data_dict.get("common_content_types", []),
+                        big_brands_count=big_brands,
+                        avg_domain_authority=avg_da,
+                        weakest_position=complete_serp_data_dict.get("weakest_position"),
+                        content_gaps_identified=complete_serp_data_dict.get("content_gaps_identified", []),
+                        differentiation_opportunities=complete_serp_data_dict.get("differentiation_opportunities", []),
+                    )
+                    
+                    # Extract top ranking URLs (only valid HTTP(S) URLs)
+                    top_ranking_urls = [
+                        r.url for r in organic_results_objs[:10]
+                        if r.url and (r.url.startswith("http://") or r.url.startswith("https://"))
+                    ]
+                
+                # Generate citations (only if we have data to cite)
+                citations_list = []
+                if config.enable_citations and (research_data_obj or complete_serp_data_dict):
+                    try:
+                        # Convert ResearchData object to dict if needed
+                        research_data_for_citations = None
+                        if research_data_obj:
+                            research_data_for_citations = {
+                                "sources": [s.model_dump() for s in research_data_obj.sources]
+                            }
+                        
+                        citations_list = citation_generator.generate_citations(
+                            research_data=research_data_for_citations,
+                            serp_data=complete_serp_data_dict,
+                            keyword=kw_text,
+                        )
+                        # Validate citations have required fields
+                        valid_citations = []
+                        for cit in citations_list:
+                            if cit.get("url") and cit.get("format_apa"):
+                                valid_citations.append(cit)
+                            else:
+                                logger.debug(f"Skipping incomplete citation for '{kw_text}'")
+                        citations_list = valid_citations
+                    except Exception as e:
+                        logger.warning(f"Citation generation failed for '{kw_text}': {e}")
+                        citations_list = []
+            
+            # Only include research_data if keyword is research-sourced (don't set to None)
+            final_research_data = research_data_obj if (research_data_obj and "research" in kw.get("source", "").lower()) else None
+            
+            # Build keyword object - only include research_data if it exists
+            kw_dict = {
+                "keyword": kw_text,
+                "intent": kw.get("intent", "informational"),
+                "score": kw.get("score", 0),
+                "cluster_name": kw.get("cluster_name"),
+                "is_question": kw.get("is_question", False),
+                "volume": volume,
+                "difficulty": difficulty,
+                "source": kw.get("source", "ai_generated"),
                 # SERP/AEO fields
-                aeo_opportunity=serp_data.features.aeo_opportunity if serp_data else 0,
-                has_featured_snippet=serp_data.features.has_featured_snippet if serp_data else False,
-                has_paa=serp_data.features.has_paa if serp_data else False,
-                serp_analyzed=serp_data is not None,
-            ))
+                "aeo_opportunity": serp_data.features.aeo_opportunity if serp_data else 0,
+                "has_featured_snippet": serp_data.features.has_featured_snippet if serp_data else False,
+                "has_paa": serp_data.features.has_paa if serp_data else False,
+                "serp_analyzed": serp_data is not None,
+                # Enhanced data capture fields
+                "content_brief": content_brief_obj,
+                "serp_data": serp_data_obj,
+                "research_summary": research_summary if research_summary else None,
+                "research_source_urls": research_source_urls,
+                "top_ranking_urls": top_ranking_urls,
+                "featured_snippet_url": featured_snippet_url,
+                "paa_questions_with_urls": paa_questions_with_urls,
+                "citations": citations_list,
+            }
+            
+            # Only add research_data if it exists (not None)
+            if final_research_data:
+                kw_dict["research_data"] = final_research_data
+            
+            keyword_objects.append(Keyword(**kw_dict))
 
         # Build clusters
         clusters_map = defaultdict(list)
@@ -420,6 +647,18 @@ class KeywordGenerator:
                 else:
                     kw["source"] = "research"
 
+            # Aggregate research data if enhanced capture enabled
+            research_data_by_keyword = {}
+            if config.enable_enhanced_capture:
+                aggregated = researcher._aggregate_research_data(research_keywords)
+                research_data_by_keyword = aggregated
+
+            # Store research data mapping for later use
+            for kw in research_keywords:
+                keyword = kw.get("keyword", "")
+                if keyword in research_data_by_keyword:
+                    kw["_research_data"] = research_data_by_keyword[keyword]
+
             return research_keywords
 
         except Exception as e:
@@ -463,6 +702,87 @@ class KeywordGenerator:
             avg_aeo = sum(a.features.aeo_opportunity for a in analyses.values()) / len(analyses) if analyses else 0
             
             logger.info(f"SERP results: {snippets} featured snippets, {paa_count} PAA sections, avg AEO score: {avg_aeo:.0f}")
+            
+            # Build complete SERP data if enhanced capture enabled
+            complete_serp_data = {}
+            if config.enable_enhanced_capture and analyzer:
+                # Build all SERP data in parallel (includes URL resolution and meta tag extraction)
+                build_tasks = []
+                build_keywords = []
+                for keyword, analysis in analyses.items():
+                    # Check if serp_data_full has actual data (not just empty dict)
+                    has_full_data = (
+                        analysis.serp_data_full and 
+                        isinstance(analysis.serp_data_full, dict) and
+                        (analysis.serp_data_full.get("organic_results") or 
+                         analysis.serp_data_full.get("featured_snippet") or
+                         analysis.serp_data_full.get("paa_questions"))
+                    )
+                    
+                    if has_full_data:
+                        build_tasks.append(
+                            analyzer._build_complete_serp_data(
+                                serp_data_full=analysis.serp_data_full,
+                                keyword=keyword,
+                                country=config.region,
+                                language=config.language[:2] if len(config.language) > 2 else config.language,
+                            )
+                        )
+                        build_keywords.append(keyword)
+                
+                # Execute all builds in parallel (includes URL resolution)
+                if build_tasks:
+                    logger.info(f"Building SERP data for {len(build_tasks)} keywords (resolving URLs and extracting meta tags)...")
+                    built_results = await asyncio.gather(*build_tasks, return_exceptions=True)
+                    for kw, result in zip(build_keywords, built_results):
+                        if isinstance(result, Exception):
+                            logger.warning(f"Failed to build SERP data for '{kw}': {result}")
+                        else:
+                            complete_serp_data[kw] = result
+                
+                # Fallback: Build from features if serp_data_full is missing
+                for keyword, analysis in analyses.items():
+                    if keyword not in complete_serp_data and analysis.features and not analysis.error:
+                        try:
+                            # Fallback: Build from features if serp_data_full is missing or empty
+                            # This happens when Gemini returns basic data but not full structure
+                            logger.debug(f"Building SERP data from features for '{keyword}' (serp_data_full missing/empty)")
+                            # Create minimal serp_data_full from features
+                            minimal_serp_data = {
+                                "organic_results": [],
+                                "featured_snippet": {
+                                    "type": "paragraph",
+                                    "content": analysis.features.featured_snippet_text or "",
+                                    "source_url": analysis.features.featured_snippet_url or "",
+                                    "source_domain": "",
+                                } if analysis.features.has_featured_snippet else None,
+                                "paa_questions": [
+                                    {"question": q, "answer_snippet": "", "source_url": "", "source_domain": ""}
+                                    for q in analysis.features.paa_questions
+                                ],
+                                "related_searches": analysis.features.related_searches or [],
+                                "avg_word_count": 0,
+                                "common_content_types": [],
+                                "big_brands_count": 0,
+                                "avg_domain_authority": 0.0,
+                                "content_gaps_identified": [],
+                                "differentiation_opportunities": [],
+                            }
+                            complete_serp_data[keyword] = await analyzer._build_complete_serp_data(
+                                serp_data_full=minimal_serp_data,
+                                keyword=keyword,
+                                country=config.region,
+                                language=config.language[:2] if len(config.language) > 2 else config.language,
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to build complete SERP data for '{keyword}': {e}")
+                    elif keyword not in complete_serp_data:
+                        logger.debug(f"Skipping SERP data build for '{keyword}' (no features or has error)")
+            
+            # Store complete SERP data in analyses for later use
+            for keyword, analysis in analyses.items():
+                if keyword in complete_serp_data:
+                    analysis._complete_serp_data = complete_serp_data[keyword]
             
             return analyses, bonus
             
@@ -1051,13 +1371,15 @@ Return JSON with ONLY the unique keywords to keep:
         if not keywords:
             return []
 
-        # Keywords from gap analysis already have scores (aeo_score)
-        # Only score AI-generated keywords
-        ai_keywords = [kw for kw in keywords if kw.get("source") != "gap_analysis"]
-        gap_keywords = [kw for kw in keywords if kw.get("source") == "gap_analysis"]
-
-        if not ai_keywords:
+        # Score ALL keywords for company-fit, including gap keywords
+        # Gap keywords have aeo_score from SE Ranking, but we need company-fit score
+        # This ensures all keywords are scored consistently for company relevance
+        
+        if not keywords:
             return keywords
+        
+        # Score all keywords (including gap keywords) for company-fit
+        keywords_to_score = keywords
 
         # Build company context
         context_parts = [f"Company: {company_info.name}"]
@@ -1067,16 +1389,19 @@ Return JSON with ONLY the unique keywords to keep:
             context_parts.append(f"Services: {', '.join(company_info.services)}")
         if company_info.products:
             context_parts.append(f"Products: {', '.join(company_info.products)}")
+        if company_info.industry:
+            context_parts.append(f"Industry: {company_info.industry}")
 
         company_context = "\n".join(context_parts)
 
+        # Score ALL keywords (including gap keywords) for company-fit
         # Score in batches
         batch_size = 25
-        num_batches = (len(ai_keywords) + batch_size - 1) // batch_size
+        num_batches = (len(keywords_to_score) + batch_size - 1) // batch_size
 
         tasks = [
             self._score_batch(
-                ai_keywords[i * batch_size : (i + 1) * batch_size],
+                keywords_to_score[i * batch_size : (i + 1) * batch_size],
                 company_context,
                 i + 1,
                 num_batches,
@@ -1086,22 +1411,25 @@ Return JSON with ONLY the unique keywords to keep:
 
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        scored_ai = []
+        scored_keywords = []
         for i, result in enumerate(results):
             if isinstance(result, Exception):
                 logger.error(f"Scoring batch {i + 1} failed: {result}")
-                # Keep keywords with default score
-                batch = ai_keywords[i * batch_size : (i + 1) * batch_size]
+                # Keep keywords with default score (or preserve existing score for gap keywords)
+                batch = keywords_to_score[i * batch_size : (i + 1) * batch_size]
                 for kw in batch:
-                    kw["score"] = 50
-                scored_ai.extend(batch)
+                    # Preserve aeo_score for gap keywords if scoring fails
+                    if kw.get("source") == "gap_analysis" and "aeo_score" in kw:
+                        kw["score"] = kw.get("score", kw.get("aeo_score", 50))
+                    else:
+                        kw["score"] = kw.get("score", 50)
+                scored_keywords.extend(batch)
             elif result:
-                scored_ai.extend(result)
+                scored_keywords.extend(result)
 
-        # Combine and sort by score
-        all_scored = gap_keywords + scored_ai
-        all_scored.sort(key=lambda x: x.get("score", 0), reverse=True)
-        return all_scored
+        # Sort by score (company-fit score, not aeo_score)
+        scored_keywords.sort(key=lambda x: x.get("score", 0), reverse=True)
+        return scored_keywords
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     async def _score_batch(
@@ -1160,6 +1488,119 @@ Return ONLY a JSON object:
 
         return keywords
 
+    async def _generate_content_brief(
+        self,
+        keyword: str,
+        research_data: Optional[dict],
+        serp_data: Optional[dict],
+        company_info: CompanyInfo,
+    ) -> Optional[dict]:
+        """
+        Generate content briefing for a keyword.
+        
+        Creates content_angle, target_questions, audience_pain_point, etc.
+        """
+        if not self.api_key:
+            return None
+        
+        try:
+            # Build context from research and SERP
+            research_context = ""
+            if research_data and research_data.get("sources"):
+                top_quotes = []
+                for source in research_data["sources"][:3]:
+                    quote = source.get("quote", "")
+                    if quote:
+                        platform = source.get("platform", "source")
+                        top_quotes.append(f"{platform}: '{quote[:150]}...'")
+                if top_quotes:
+                    research_context = "Research findings:\n" + "\n".join(top_quotes)
+            
+            serp_context = ""
+            if serp_data:
+                content_types = serp_data.get("common_content_types", [])
+                gaps = serp_data.get("content_gaps_identified", [])
+                avg_wc = serp_data.get("avg_word_count", 0)
+                serp_context = f"""
+SERP Analysis:
+- Average word count: {avg_wc}
+- Common content types: {', '.join(content_types[:3])}
+- Content gaps: {', '.join(gaps[:3]) if gaps else 'None identified'}
+"""
+            
+            # Build company context
+            company_context_parts = [f"Company: {company_info.name}"]
+            if company_info.description:
+                company_context_parts.append(f"Description: {company_info.description[:200]}")
+            if company_info.services:
+                company_context_parts.append(f"Services: {', '.join(company_info.services[:3])}")
+            if company_info.products:
+                company_context_parts.append(f"Products: {', '.join(company_info.products[:3])}")
+            company_context = "\n".join(company_context_parts)
+            
+            prompt = f"""Generate a content briefing for this keyword: "{keyword}"
+
+{company_context}
+
+{research_context}
+
+{serp_context}
+
+Create a comprehensive content brief that includes:
+
+1. Content Angle: What approach/angle should the article take? (1-2 sentences)
+2. Target Questions: List 5-7 specific questions the article should answer (from PAA + research)
+3. Content Gap: What's missing in current SERP content? (1-2 sentences)
+4. Audience Pain Point: Summarize what users are looking for - "Users were looking for X" (1-2 sentences)
+5. Recommended Word Count: Based on SERP analysis (number)
+6. Featured Snippet Opportunity: What type of featured snippet opportunity exists? (paragraph, list, table, none)
+7. Research Context: Summary of user needs from research (2-3 sentences)
+
+Return JSON:
+{{
+  "content_angle": "...",
+  "target_questions": ["question1", "question2", ...],
+  "content_gap": "...",
+  "audience_pain_point": "Users were looking for...",
+  "recommended_word_count": 1800,
+  "fs_opportunity_type": "paragraph|list|table|none",
+  "research_context": "..."
+}}"""
+            
+            # Use new SDK for consistency (same as ResearchEngine and GeminiSerpAnalyzer)
+            from google import genai as genai_new
+            
+            client = genai_new.Client(api_key=self.api_key)
+            response = await asyncio.to_thread(
+                client.models.generate_content,
+                model=self.model_name,
+                contents=prompt,
+                config=genai_new.types.GenerateContentConfig(
+                    temperature=0.5,
+                    response_mime_type="application/json",
+                ),
+            )
+            
+            # Parse response with error handling
+            if not hasattr(response, 'text') or not response.text:
+                logger.warning(f"Empty response for content brief '{keyword}'")
+                return None
+            
+            try:
+                data = self._parse_json_response(response.text)
+                # Validate required fields
+                if not isinstance(data, dict) or not data.get("content_angle") or not data.get("target_questions"):
+                    logger.warning(f"Incomplete content brief for '{keyword}' - missing required fields")
+                    return None
+                return data
+            except (KeyError, AttributeError, TypeError) as e:
+                logger.error(f"Failed to parse content brief JSON for '{keyword}': {e}")
+                return None
+            
+        except Exception as e:
+            logger.error(f"Content briefing generation failed for '{keyword}': {e}")
+            return None
+    
     async def _cluster_keywords(
         self, keywords: list[dict], company_info: CompanyInfo, cluster_count: int
     ) -> list[dict]:

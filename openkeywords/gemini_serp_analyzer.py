@@ -46,6 +46,9 @@ class SerpAnalysis:
     
     # Bonus keywords discovered from SERP
     bonus_keywords: list[str] = field(default_factory=list)
+    
+    # Enhanced data capture: full SERP data
+    serp_data_full: Optional[dict] = None
 
 
 class GeminiSerpAnalyzer:
@@ -182,23 +185,64 @@ class GeminiSerpAnalyzer:
                 # Craft prompt - Gemini will use Google Search grounding
                 prompt = f"""Search Google for: "{keyword}" (country: {self.country}, language: {self.language})
 
-Analyze the search results and provide a SERP analysis in JSON format:
+Analyze the COMPLETE SERP and provide detailed analysis in JSON format:
 
+1. All top 10 organic results with:
+   - position (1-10)
+   - url (full URL)
+   - title (page title)
+   - description (meta description)
+   - domain (domain name)
+   - estimated word count
+   - page type (listicle, comparison, how-to, guide, product_page, etc.)
+   - publish date (if available)
+   - last updated (if available)
+
+2. Featured snippet (if present):
+   - type (paragraph, list, table, video)
+   - content (snippet text)
+   - source_url (URL)
+   - source_domain (domain)
+
+3. People Also Ask questions (if present):
+   - question (the question)
+   - answer_snippet (answer shown)
+   - source_url (URL)
+   - source_domain (domain)
+
+4. Related searches
+
+5. Aggregated insights:
+   - avg_word_count (average word count of top 10)
+   - common_content_types (most common page types)
+   - big_brands_count (number of big brands in top 10)
+   - avg_domain_authority (estimated average DA)
+   - content_gaps_identified (what's missing)
+   - differentiation_opportunities (how to stand out)
+
+Return JSON:
 {{
+  "organic_results": [
+    {{"position": 1, "url": "https://...", "title": "...", "description": "...", "domain": "...", "estimated_word_count": 3200, "page_type": "comparison", "publish_date": "2024-01-15", "last_updated": "2024-11-20"}},
+    ...
+  ],
+  "featured_snippet": {{"type": "paragraph", "content": "...", "source_url": "https://...", "source_domain": "..."}} or null,
+  "paa_questions": [{{"question": "...", "answer_snippet": "...", "source_url": "https://...", "source_domain": "..."}}, ...],
+  "related_searches": ["...", ...],
+  "avg_word_count": 2640,
+  "common_content_types": ["comparison", "listicle"],
+  "big_brands_count": 6,
+  "avg_domain_authority": 82.3,
+  "content_gaps_identified": ["...", ...],
+  "differentiation_opportunities": ["...", ...],
   "has_featured_snippet": true/false,
-  "featured_snippet_text": "excerpt" or null,
-  "featured_snippet_url": "URL" or null,
   "has_paa": true/false,
-  "paa_questions": ["question 1", "question 2"],
-  "related_searches": ["related 1", "related 2"],
-  "top_domains": ["domain1.com", "domain2.com"],
   "organic_results_count": 10,
+  "top_domains": ["domain1.com", "domain2.com"],
   "volume_estimate": "high/medium/low",
   "volume_reasoning": "brief explanation"
 }}
 
-Extract PAA questions, related searches, and top ranking domains. 
-Estimate search volume based on competition and domain authority.
 Return ONLY valid JSON."""
 
                 # Make async request using NEW SDK (same as ResearchEngine)
@@ -212,7 +256,36 @@ Return ONLY valid JSON."""
                     ),
                 )
                 
+                # Extract real URLs from grounding metadata BEFORE parsing JSON
+                real_urls_map = {}
+                if hasattr(response, 'candidates') and response.candidates:
+                    candidate = response.candidates[0]
+                    if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
+                        grounding_chunks = getattr(candidate.grounding_metadata, 'grounding_chunks', [])
+                        for chunk in grounding_chunks:
+                            try:
+                                if hasattr(chunk, 'web') and chunk.web:
+                                    redirect_url = None
+                                    if hasattr(chunk.web, 'uri'):
+                                        redirect_url = chunk.web.uri
+                                    elif hasattr(chunk.web, 'url'):
+                                        redirect_url = chunk.web.url
+                                    
+                                    if redirect_url and redirect_url.startswith("https://vertexaisearch.cloud.google.com/"):
+                                        # Try to get real URL from chunk metadata if available
+                                        # Sometimes the real URL is in chunk.web.title or other fields
+                                        if hasattr(chunk.web, 'title'):
+                                            # The title might contain hints about the real domain
+                                            pass
+                                        # Store redirect URL for later resolution
+                                        real_urls_map[redirect_url] = redirect_url  # Will be resolved later
+                            except Exception as e:
+                                logger.debug(f"Error extracting grounding URL: {e}")
+                
                 # Parse response
+                if not hasattr(response, 'text') or not response.text:
+                    raise ValueError("Empty response from Gemini")
+                
                 response_text = response.text.strip()
                 
                 # Extract JSON from response (handle markdown code blocks)
@@ -222,7 +295,13 @@ Return ONLY valid JSON."""
                 elif "```" in response_text:
                     response_text = response_text.split("```")[1].split("```")[0].strip()
                 
+                if not response_text:
+                    raise ValueError("No JSON found in response")
+                
                 data = json.loads(response_text)
+                
+                # Store redirect URLs map for later resolution
+                data["_redirect_urls_map"] = real_urls_map
                 
                 return self._parse_gemini_response(keyword, data)
                 
@@ -267,11 +346,200 @@ Return ONLY valid JSON."""
             keyword, features
         )
         
+        # Store full SERP data for enhanced capture
+        # Ensure we always have a dict structure even if Gemini returns minimal data
+        serp_data_full = data.copy() if isinstance(data, dict) else {}
+        
+        # Ensure required fields exist for enhanced capture
+        if "organic_results" not in serp_data_full:
+            serp_data_full["organic_results"] = []
+        if "paa_questions" not in serp_data_full:
+            serp_data_full["paa_questions"] = []
+        if "related_searches" not in serp_data_full:
+            serp_data_full["related_searches"] = []
+        
         return SerpAnalysis(
             keyword=keyword,
             features=features,
             bonus_keywords=[b for b in bonus_keywords if b],
+            serp_data_full=serp_data_full,
         )
+    
+    async def _build_complete_serp_data(
+        self, serp_data_full: dict, keyword: str, country: str = "us", language: str = "en"
+    ) -> dict:
+        """
+        Build CompleteSERPData object from full SERP data.
+        Resolves redirect URLs and extracts meta tags.
+        
+        Args:
+            keyword: The keyword
+            serp_data_full: Full SERP data from Gemini
+            country: Country code
+            language: Language code
+            
+        Returns:
+            CompleteSERPData dict
+        """
+        from datetime import datetime
+        from .url_extractor import resolve_urls_batch
+        
+        # Validate input
+        if not serp_data_full or not isinstance(serp_data_full, dict):
+            logger.warning(f"Invalid serp_data_full for '{keyword}': {type(serp_data_full)}")
+            serp_data_full = {}
+        
+        # Ensure required fields exist
+        if "organic_results" not in serp_data_full:
+            serp_data_full["organic_results"] = []
+        if "paa_questions" not in serp_data_full:
+            serp_data_full["paa_questions"] = []
+        if "related_searches" not in serp_data_full:
+            serp_data_full["related_searches"] = []
+        
+        # Collect all URLs that need resolution
+        urls_to_resolve = []
+        
+        for result in serp_data_full.get("organic_results", []):
+            if not isinstance(result, dict):
+                continue
+            url = result.get("url", "")
+            if url and url.startswith("https://vertexaisearch.cloud.google.com/"):
+                urls_to_resolve.append(url)
+        
+        # Also check featured snippet and PAA URLs
+        featured_snippet = serp_data_full.get("featured_snippet")
+        if featured_snippet and isinstance(featured_snippet, dict):
+            fs_url = featured_snippet.get("source_url", "")
+            if fs_url and fs_url.startswith("https://vertexaisearch.cloud.google.com/"):
+                urls_to_resolve.append(fs_url)
+        
+        for paa in serp_data_full.get("paa_questions", []):
+            if not isinstance(paa, dict):
+                continue
+            url = paa.get("source_url", "")
+            if url and url.startswith("https://vertexaisearch.cloud.google.com/"):
+                urls_to_resolve.append(url)
+        
+        # Resolve redirects and extract meta tags in parallel
+        resolved_urls = {}
+        if urls_to_resolve:
+            logger.info(f"Resolving {len(urls_to_resolve)} redirect URLs and extracting meta tags for '{keyword}'...")
+            resolved_urls = await resolve_urls_batch(urls_to_resolve, extract_meta=True)
+        
+        organic_results = []
+        for result in serp_data_full.get("organic_results", []):
+            if not isinstance(result, dict):
+                continue
+            
+            original_url = result.get("url", "")
+            resolved_data = resolved_urls.get(original_url, {})
+            if not isinstance(resolved_data, dict):
+                resolved_data = {}
+            resolved_url = resolved_data.get("resolved_url", original_url)
+            meta_tags = resolved_data.get("meta_tags", {})
+            if not isinstance(meta_tags, dict):
+                meta_tags = {}
+            
+            # Extract domain from resolved URL
+            from urllib.parse import urlparse
+            try:
+                parsed = urlparse(resolved_url)
+                domain = parsed.netloc.replace("www.", "")
+            except:
+                domain = result.get("domain", "")
+            
+            organic_results.append({
+                "position": result.get("position", 0),
+                "url": resolved_url,  # Use resolved URL, not redirect
+                "title": result.get("title", ""),
+                "description": result.get("description"),
+                "domain": domain,
+                "domain_authority": result.get("domain_authority"),
+                "is_big_brand": self._is_big_brand(domain),
+                "page_type": result.get("page_type"),
+                "estimated_word_count": result.get("estimated_word_count"),
+                "publish_date": result.get("publish_date"),
+                "last_updated": result.get("last_updated"),
+                "has_featured_snippet": False,
+                "has_site_links": False,
+                "has_reviews_stars": False,
+                "estimated_monthly_traffic": result.get("estimated_monthly_traffic"),
+                "meta_tags": meta_tags if meta_tags else None,  # Include meta tags
+            })
+        
+        # Resolve featured snippet URL if it's a redirect
+        featured_snippet = None
+        featured_snippet_raw = serp_data_full.get("featured_snippet")
+        if featured_snippet_raw and isinstance(featured_snippet_raw, dict):
+            fs = featured_snippet_raw
+            fs_url = fs.get("source_url", "")
+            if fs_url and fs_url.startswith("https://vertexaisearch.cloud.google.com/"):
+                resolved_fs_data = resolved_urls.get(fs_url, {})
+                if isinstance(resolved_fs_data, dict):
+                    fs_url = resolved_fs_data.get("resolved_url", fs_url)
+            
+            featured_snippet = {
+                "type": fs.get("type", "paragraph"),
+                "content": fs.get("content", ""),
+                "source_url": fs_url,  # Use resolved URL
+                "source_domain": fs.get("source_domain", ""),
+                "source_title": fs.get("source_title"),
+                "items": fs.get("items"),
+                "table_data": fs.get("table_data"),
+            }
+        
+        # Resolve PAA question URLs
+        paa_questions = []
+        for paa in serp_data_full.get("paa_questions", []):
+            if not isinstance(paa, dict):
+                continue
+            paa_url = paa.get("source_url", "")
+            if paa_url and paa_url.startswith("https://vertexaisearch.cloud.google.com/"):
+                resolved_paa_data = resolved_urls.get(paa_url, {})
+                if isinstance(resolved_paa_data, dict):
+                    paa_url = resolved_paa_data.get("resolved_url", paa_url)
+            
+            paa_questions.append({
+                "question": paa.get("question", ""),
+                "answer_snippet": paa.get("answer_snippet"),
+                "source_url": paa_url,  # Use resolved URL
+                "source_domain": paa.get("source_domain", ""),
+                "source_title": paa.get("source_title"),
+            })
+        
+        return {
+            "keyword": keyword,
+            "search_date": datetime.now().isoformat(),
+            "country": country,
+            "language": language,
+            "organic_results": organic_results,
+            "featured_snippet": featured_snippet,
+            "paa_questions": paa_questions,
+            "related_searches": serp_data_full.get("related_searches", []),
+            "image_pack_present": serp_data_full.get("image_pack_present", False),
+            "video_results": serp_data_full.get("video_results", []),
+            "ads_count": serp_data_full.get("ads_count", 0),
+            "ads_top_domains": serp_data_full.get("ads_top_domains", []),
+            "avg_word_count": serp_data_full.get("avg_word_count", 0),
+            "common_content_types": serp_data_full.get("common_content_types", []),
+            "big_brands_count": serp_data_full.get("big_brands_count", 0),
+            "avg_domain_authority": serp_data_full.get("avg_domain_authority", 0.0),
+            "weakest_position": serp_data_full.get("weakest_position"),
+            "content_gaps_identified": serp_data_full.get("content_gaps_identified", []),
+            "differentiation_opportunities": serp_data_full.get("differentiation_opportunities", []),
+        }
+    
+    def _is_big_brand(self, domain: str) -> bool:
+        """Check if domain is a big brand."""
+        big_brands = [
+            "forbes.com", "nytimes.com", "washingtonpost.com", "wsj.com",
+            "techcrunch.com", "theverge.com", "wired.com", "cnet.com",
+            "capterra.com", "g2.com", "trustpilot.com", "softwareadvice.com",
+            "getapp.com", "cnet.com", "pcmag.com", "zdnet.com",
+        ]
+        domain_lower = domain.lower().replace("www.", "")
+        return any(brand in domain_lower for brand in big_brands)
     
     def _calculate_aeo_opportunity(
         self, keyword: str, features: SerpFeatures
@@ -393,4 +661,15 @@ if __name__ == "__main__":
                 print(f"  + {b}")
     
     asyncio.run(main())
+    
+    def _is_big_brand(self, domain: str) -> bool:
+        """Check if domain is a big brand."""
+        big_brands = [
+            "forbes.com", "nytimes.com", "washingtonpost.com", "wsj.com",
+            "techcrunch.com", "theverge.com", "wired.com", "cnet.com",
+            "capterra.com", "g2.com", "trustpilot.com", "softwareadvice.com",
+            "getapp.com", "cnet.com", "pcmag.com", "zdnet.com",
+        ]
+        domain_lower = domain.lower().replace("www.", "")
+        return any(brand in domain_lower for brand in big_brands)
 
