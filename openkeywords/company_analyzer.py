@@ -185,6 +185,11 @@ Focus on extracting SPECIFIC information:
 - What problems do they SOLVE? (pain points/customer problems)
 - What makes them UNIQUE? (differentiators/value props)
 - Who are their CUSTOMERS? (target audience)
+  * IMPORTANT: Include company sizes: "startups", "SMEs", "mid-market companies", "enterprise", "Fortune 500"
+  * Example: ["B2B SaaS startups", "Enterprise companies", "Small businesses"]
+- What GEOGRAPHIC MARKETS do they serve? (primary_region)
+  * IMPORTANT: Be specific - "US", "Europe", "Germany", "UK", "APAC", "Global"
+  * If they mention specific countries/regions, use those (e.g., "Germany", "Benelux", "DACH region")
 - Who are their COMPETITORS?
 - What is their BRAND VOICE? (formal/casual, technical/simple)
 - What INDUSTRY are they in? (be specific!)
