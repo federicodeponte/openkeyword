@@ -575,11 +575,27 @@ class KeywordGenerator:
                 "volume": volume,
                 "difficulty": difficulty,
                 "source": kw.get("source", "ai_generated"),
-                # SERP/AEO fields
-                "aeo_opportunity": serp_data.features.aeo_opportunity if serp_data else 0,
-                "has_featured_snippet": serp_data.features.has_featured_snippet if serp_data else False,
-                "has_paa": serp_data.features.has_paa if serp_data else False,
-                "serp_analyzed": serp_data is not None,
+                # SERP/AEO fields - safely access features
+                "aeo_opportunity": (
+                    serp_data.features.aeo_opportunity 
+                    if (serp_data and hasattr(serp_data, 'features') and serp_data.features and hasattr(serp_data.features, 'aeo_opportunity')) 
+                    else None
+                ),
+                "has_featured_snippet": (
+                    serp_data.features.has_featured_snippet 
+                    if (serp_data and hasattr(serp_data, 'features') and serp_data.features and hasattr(serp_data.features, 'has_featured_snippet')) 
+                    else None
+                ),
+                "has_paa": (
+                    serp_data.features.has_paa 
+                    if (serp_data and hasattr(serp_data, 'features') and serp_data.features and hasattr(serp_data.features, 'has_paa')) 
+                    else None
+                ),
+                "serp_analyzed": (
+                    serp_data is not None 
+                    and hasattr(serp_data, 'features') 
+                    and serp_data.features is not None
+                ),
                 # Enhanced data capture fields
                 "content_brief": content_brief_obj,
                 "serp_data": serp_data_obj,
