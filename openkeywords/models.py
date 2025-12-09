@@ -154,6 +154,17 @@ class ResearchData(BaseModel):
     sentiment_breakdown: dict[str, int] = Field(default_factory=dict, description="Sentiment breakdown")
 
 
+class ContentBriefSource(BaseModel):
+    """Source attribution for content brief insights."""
+    
+    type: str = Field(..., description="Source type: 'research', 'serp', 'paa', 'trends'")
+    platform: Optional[str] = Field(default=None, description="Platform name (Reddit, Quora, etc.)")
+    url: Optional[str] = Field(default=None, description="Source URL")
+    title: Optional[str] = Field(default=None, description="Source title or description")
+    quote: Optional[str] = Field(default=None, description="Relevant quote or excerpt")
+    position: Optional[int] = Field(default=None, description="SERP position if applicable")
+
+
 class ContentBrief(BaseModel):
     """Content briefing for a keyword."""
     
@@ -164,6 +175,7 @@ class ContentBrief(BaseModel):
     recommended_word_count: Optional[int] = Field(default=None, description="Recommended word count")
     fs_opportunity_type: Optional[str] = Field(default=None, description="Featured snippet opportunity type")
     research_context: Optional[str] = Field(default=None, description="Summary of user needs from research")
+    sources: list[ContentBriefSource] = Field(default_factory=list, description="Sources that informed this brief")
 
 
 class SERPRanking(BaseModel):

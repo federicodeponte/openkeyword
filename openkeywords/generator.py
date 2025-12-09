@@ -379,7 +379,7 @@ class KeywordGenerator:
 
         # Step 13: Generate citations (if enabled)
         from .citation_generator import CitationGenerator
-        from .models import ResearchData, ResearchSource, ContentBrief, CompleteSERPData, SERPRanking, FeaturedSnippetData, PAAQuestion, GoogleTrendsData, AutocompleteData
+        from .models import ResearchData, ResearchSource, ContentBrief, ContentBriefSource, CompleteSERPData, SERPRanking, FeaturedSnippetData, PAAQuestion, GoogleTrendsData, AutocompleteData
         
         citation_generator = CitationGenerator()
 
@@ -455,7 +455,21 @@ class KeywordGenerator:
                 # Build ContentBrief object
                 content_brief_dict = content_briefs.get(kw_text)
                 if content_brief_dict:
-                    content_brief_obj = ContentBrief(**content_brief_dict)
+                    # Convert sources to ContentBriefSource objects
+                    sources_list = content_brief_dict.get("sources", [])
+                    source_objects = []
+                    for src_dict in sources_list:
+                        try:
+                            source_objects.append(ContentBriefSource(**src_dict))
+                        except Exception as e:
+                            logger.warning(f"Failed to create ContentBriefSource: {e}")
+                            continue
+                    
+                    # Create ContentBrief with sources
+                    content_brief_obj = ContentBrief(
+                        **{k: v for k, v in content_brief_dict.items() if k != "sources"},
+                        sources=source_objects
+                    )
                 
                 # Build CompleteSERPData object
                 serp_analysis_obj = serp_analyses.get(kw_text)
@@ -1551,15 +1565,27 @@ Return ONLY a JSON object:
             return None
         
         try:
+            # Collect sources for attribution
+            sources = []
+            
             # Build context from research and SERP
             research_context = ""
             if research_data and research_data.get("sources"):
                 top_quotes = []
-                for source in research_data["sources"][:3]:
+                for source in research_data["sources"][:5]:  # Top 5 for attribution
                     quote = source.get("quote", "")
                     if quote:
                         platform = source.get("platform", "source")
                         top_quotes.append(f"{platform}: '{quote[:150]}...'")
+                        
+                        # Add research source
+                        sources.append({
+                            "type": "research",
+                            "platform": platform,
+                            "url": source.get("url"),
+                            "title": source.get("source_title"),
+                            "quote": quote[:200] if quote else None,
+                        })
                 if top_quotes:
                     research_context = "Research findings:\n" + "\n".join(top_quotes)
             
@@ -1574,6 +1600,27 @@ SERP Analysis:
 - Common content types: {', '.join(content_types[:3])}
 - Content gaps: {', '.join(gaps[:3]) if gaps else 'None identified'}
 """
+                
+                # Add top SERP sources
+                organic_results = serp_data.get("organic_results", [])
+                for result in organic_results[:3]:  # Top 3 ranking pages
+                    if isinstance(result, dict):
+                        sources.append({
+                            "type": "serp",
+                            "url": result.get("url"),
+                            "title": result.get("title"),
+                            "position": result.get("position"),
+                        })
+                
+                # Add PAA sources
+                paa_questions = serp_data.get("paa_questions", [])
+                for paa in paa_questions[:3]:  # Top 3 PAA questions
+                    if isinstance(paa, dict):
+                        sources.append({
+                            "type": "paa",
+                            "title": paa.get("question"),
+                            "url": paa.get("source_url"),
+                        })
             
             # Build company context
             company_context_parts = [f"Company: {company_info.name}"]
@@ -1585,6 +1632,21 @@ SERP Analysis:
                 company_context_parts.append(f"Products: {', '.join(company_info.products[:3])}")
             company_context = "\n".join(company_context_parts)
             
+            # Build sources list for prompt context
+            sources_context = ""
+            if sources:
+                sources_list = []
+                for i, src in enumerate(sources[:8], 1):  # Top 8 sources
+                    src_desc = f"{i}. {src.get('type', 'source').upper()}"
+                    if src.get('platform'):
+                        src_desc += f" ({src['platform']})"
+                    if src.get('title'):
+                        src_desc += f": {src['title'][:100]}"
+                    if src.get('url'):
+                        src_desc += f" - {src['url']}"
+                    sources_list.append(src_desc)
+                sources_context = "\n\nSources available:\n" + "\n".join(sources_list)
+            
             prompt = f"""Generate a content briefing for this keyword: "{keyword}"
 
 {company_context}
@@ -1592,6 +1654,7 @@ SERP Analysis:
 {research_context}
 
 {serp_context}
+{sources_context}
 
 Create a comprehensive content brief that includes:
 
@@ -1602,6 +1665,11 @@ Create a comprehensive content brief that includes:
 5. Recommended Word Count: Based on SERP analysis (number)
 6. Featured Snippet Opportunity: What type of featured snippet opportunity exists? (paragraph, list, table, none)
 7. Research Context: Summary of user needs from research (2-3 sentences)
+
+IMPORTANT: Reference specific sources when making claims. For example:
+- "Based on Reddit discussions, users were looking for..."
+- "According to top-ranking SERP results, the content gap is..."
+- "PAA questions indicate users want to know..."
 
 Return JSON:
 {{
@@ -1639,6 +1707,10 @@ Return JSON:
                 if not isinstance(data, dict) or not data.get("content_angle") or not data.get("target_questions"):
                     logger.warning(f"Incomplete content brief for '{keyword}' - missing required fields")
                     return None
+                
+                # Add sources to the brief
+                data["sources"] = sources
+                
                 return data
             except (KeyError, AttributeError, TypeError) as e:
                 logger.error(f"Failed to parse content brief JSON for '{keyword}': {e}")
