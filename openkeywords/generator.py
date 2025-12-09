@@ -334,8 +334,8 @@ class KeywordGenerator:
         # Step 11: Generate content briefs (if enabled) - PARALLEL for performance
         content_briefs = {}
         if config.enable_enhanced_capture and config.enable_content_briefs:
-            # Generate briefs for top keywords
-            top_keywords_for_briefs = all_keywords[:config.content_brief_count]
+            # Generate briefs for ALL keywords (not just top N)
+            top_keywords_for_briefs = all_keywords
             logger.info(f"📝 Generating content briefs for {len(top_keywords_for_briefs)} keywords...")
             
             # Generate briefs in parallel for performance
