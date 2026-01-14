@@ -35,6 +35,12 @@ class ClusteredKeyword(BaseModel):
     is_question: bool = Field(default=False, description="Is question")
     cluster_name: Optional[str] = Field(default=None, description="Cluster name")
 
+    # Source attribution (from Stage 2 research)
+    source_url: Optional[str] = Field(default=None, description="URL to source discussion")
+    source_title: Optional[str] = Field(default=None, description="Title of source thread/question")
+    source_quote: Optional[str] = Field(default=None, description="Quote from source")
+    content_opportunity: Optional[str] = Field(default=None, description="Content opportunity / pain point")
+
     # SERP metrics (populated by Stage 6)
     volume: int = Field(default=0, description="Monthly search volume")
     difficulty: int = Field(default=0, description="SEO difficulty 0-100")

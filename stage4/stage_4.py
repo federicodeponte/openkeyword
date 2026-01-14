@@ -79,7 +79,7 @@ async def run_stage_4(input_data: Stage4Input) -> Stage4Output:
         ]
         logger.info(f"  After word count filter: {len(keywords)} ({before - len(keywords)} removed)")
 
-    # Convert to ScoredKeyword objects
+    # Convert to ScoredKeyword objects (preserve source attribution)
     scored_keywords = [
         ScoredKeyword(
             keyword=kw.get("keyword", ""),
@@ -87,6 +87,11 @@ async def run_stage_4(input_data: Stage4Input) -> Stage4Output:
             score=kw.get("score", 0),
             source=kw.get("source", "ai_generated"),
             is_question=kw.get("is_question", False),
+            # Source attribution (from Stage 2 research)
+            source_url=kw.get("source_url"),
+            source_title=kw.get("source_title"),
+            source_quote=kw.get("source_quote"),
+            content_opportunity=kw.get("content_opportunity"),
         )
         for kw in keywords
     ]

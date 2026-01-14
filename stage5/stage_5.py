@@ -58,7 +58,7 @@ async def run_stage_5(input_data: Stage5Input) -> Stage5Output:
     logger.info(f"  Target clusters: {input_data.cluster_count}")
 
     if not input_data.enable_clustering or not keywords:
-        # Return keywords without clustering
+        # Return keywords without clustering (preserve source attribution)
         clustered = [
             ClusteredKeyword(
                 keyword=kw.keyword,
@@ -67,6 +67,11 @@ async def run_stage_5(input_data: Stage5Input) -> Stage5Output:
                 source=kw.source,
                 is_question=kw.is_question,
                 cluster_name=None,
+                # Source attribution
+                source_url=kw.source_url,
+                source_title=kw.source_title,
+                source_quote=kw.source_quote,
+                content_opportunity=kw.content_opportunity,
             )
             for kw in keywords
         ]
@@ -133,7 +138,7 @@ Return JSON with clusters array, each containing name and keywords array."""
             for kw in cluster_keywords:
                 keyword_cluster_map[kw.lower()] = cluster_name
 
-        # Apply clusters to keywords
+        # Apply clusters to keywords (preserve source attribution)
         clustered_keywords = []
         for kw in keywords:
             cluster_name = keyword_cluster_map.get(kw.keyword.lower(), "Uncategorized")
@@ -145,6 +150,11 @@ Return JSON with clusters array, each containing name and keywords array."""
                     source=kw.source,
                     is_question=kw.is_question,
                     cluster_name=cluster_name,
+                    # Source attribution
+                    source_url=kw.source_url,
+                    source_title=kw.source_title,
+                    source_quote=kw.source_quote,
+                    content_opportunity=kw.content_opportunity,
                 )
             )
 
@@ -160,7 +170,7 @@ Return JSON with clusters array, each containing name and keywords array."""
 
     except Exception as e:
         logger.error(f"Clustering failed: {e}")
-        # Return keywords without clustering
+        # Return keywords without clustering (preserve source attribution)
         clustered = [
             ClusteredKeyword(
                 keyword=kw.keyword,
@@ -169,6 +179,11 @@ Return JSON with clusters array, each containing name and keywords array."""
                 source=kw.source,
                 is_question=kw.is_question,
                 cluster_name="Uncategorized",
+                # Source attribution
+                source_url=kw.source_url,
+                source_title=kw.source_title,
+                source_quote=kw.source_quote,
+                content_opportunity=kw.content_opportunity,
             )
             for kw in keywords
         ]

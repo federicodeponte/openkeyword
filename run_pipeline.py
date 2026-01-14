@@ -175,13 +175,18 @@ async def run_pipeline(
     # =========================================================================
     all_keywords = []
 
-    # Add research keywords
+    # Add research keywords (preserve source attribution from Stage 2)
     for kw in stage2_output.keywords:
         all_keywords.append({
             "keyword": kw.keyword,
             "intent": kw.intent,
             "source": kw.source,
             "is_question": kw.intent == "question",
+            # Source attribution
+            "source_url": kw.url,
+            "source_title": kw.source_title,
+            "source_quote": kw.quote,
+            "content_opportunity": kw.pain_point_extracted,
         })
 
     # Add AI keywords
