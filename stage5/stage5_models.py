@@ -35,6 +35,16 @@ class ClusteredKeyword(BaseModel):
     is_question: bool = Field(default=False, description="Is question")
     cluster_name: Optional[str] = Field(default=None, description="Cluster name")
 
+    # SERP metrics (populated by Stage 6)
+    volume: int = Field(default=0, description="Monthly search volume")
+    difficulty: int = Field(default=0, description="SEO difficulty 0-100")
+
+    # AEO metrics (populated by Stage 6)
+    aeo_opportunity: int = Field(default=0, description="AEO opportunity score 0-100")
+    has_featured_snippet: bool = Field(default=False, description="Has featured snippet")
+    has_paa: bool = Field(default=False, description="Has People Also Ask")
+    serp_analyzed: bool = Field(default=False, description="SERP was analyzed")
+
 
 class Stage5Input(BaseModel):
     """Input for Stage 5: Clustering"""

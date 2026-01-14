@@ -2,16 +2,18 @@
 """
 OpenKeywords Pipeline Orchestrator
 
-Runs the 5-stage keyword generation pipeline:
+Runs the 6-stage keyword generation pipeline:
 - Stage 1: Company Analysis (runs once)
 - Stage 2: Deep Research (Reddit, Quora, forums)
 - Stage 3: AI Keyword Generation
 - Stage 4: Scoring & Deduplication
 - Stage 5: Clustering
+- Stage 6: SERP Analysis & Volume Lookup (optional)
 
 Usage:
     python run_pipeline.py --url https://example.com --count 50
     python run_pipeline.py --url https://example.com --research --count 100
+    python run_pipeline.py --url https://example.com --serp-analysis --volume-lookup
 
 Architecture:
     Stage 1: Company Analysis
@@ -24,7 +26,9 @@ Architecture:
          ↓
     Stage 5: Clustering
          ↓
-    [Output: Keywords + Clusters]
+    Stage 6: SERP Analysis & Volume Lookup (optional)
+         ↓
+    [Output: Keywords + Clusters + SERP Data]
 """
 
 import asyncio
@@ -67,6 +71,9 @@ async def run_pipeline(
     min_score: int = 40,
     min_word_count: int = 2,
     cluster_count: int = 6,
+    enable_serp_analysis: bool = False,
+    enable_volume_lookup: bool = False,
+    serp_sample_size: int = 15,
 ) -> dict:
     """
     Run the full keyword generation pipeline.
@@ -82,6 +89,9 @@ async def run_pipeline(
         min_score: Minimum company-fit score
         min_word_count: Minimum keyword word count
         cluster_count: Number of clusters to create
+        enable_serp_analysis: Enable SERP analysis for AEO opportunity scoring
+        enable_volume_lookup: Get real search volumes from DataForSEO
+        serp_sample_size: Number of top keywords to analyze for SERP features
 
     Returns:
         Dict with pipeline results
@@ -95,9 +105,13 @@ async def run_pipeline(
     logger.info(f"Target: {target_count} keywords")
     logger.info(f"Language: {language}, Region: {region}")
     logger.info(f"Research: {'ON' if enable_research else 'OFF'}")
+    logger.info(f"SERP Analysis: {'ON' if enable_serp_analysis else 'OFF'}")
+    logger.info(f"Volume Lookup: {'ON' if enable_volume_lookup else 'OFF'}")
     logger.info("=" * 60)
 
     total_ai_calls = 0
+    total_api_calls = 0
+    total_api_cost = 0.0
 
     # =========================================================================
     # Stage 1: Company Analysis
@@ -218,6 +232,31 @@ async def run_pipeline(
     logger.info(f"\n[Stage 5 Complete] {len(stage5_output.clusters)} clusters")
 
     # =========================================================================
+    # Stage 6: SERP Analysis & Volume Lookup (optional)
+    # =========================================================================
+    if enable_serp_analysis or enable_volume_lookup:
+        from stage6 import run_stage_6
+        from stage6.stage6_models import Stage6Input
+
+        stage6_input = Stage6Input(
+            keywords=stage5_output.keywords,
+            enable_serp_analysis=enable_serp_analysis,
+            enable_volume_lookup=enable_volume_lookup,
+            serp_sample_size=serp_sample_size,
+            language=language,
+            region=region,
+        )
+
+        stage6_output = await run_stage_6(stage6_input)
+        total_api_calls = stage6_output.api_calls
+        total_api_cost = stage6_output.api_cost
+
+        # Update keywords with enriched data
+        stage5_output.keywords = stage6_output.keywords
+
+        logger.info(f"\n[Stage 6 Complete] SERP: {stage6_output.serp_analyzed_count}, Volume: {stage6_output.volume_enriched_count}")
+
+    # =========================================================================
     # Build Results
     # =========================================================================
     end_time = time.time()
@@ -256,6 +295,8 @@ async def run_pipeline(
             "duplicates_removed": stage4_output.duplicates_removed,
             "low_score_removed": stage4_output.low_score_removed,
             "ai_calls": total_ai_calls,
+            "api_calls": total_api_calls,
+            "api_cost_usd": round(total_api_cost, 4),
             "duration_seconds": round(duration, 1),
         },
         "intent_breakdown": intent_breakdown,
@@ -340,6 +381,22 @@ def main():
         type=str,
         help="Output JSON file path",
     )
+    parser.add_argument(
+        "--serp-analysis",
+        action="store_true",
+        help="Enable SERP analysis (AEO opportunity scores)",
+    )
+    parser.add_argument(
+        "--volume-lookup",
+        action="store_true",
+        help="Enable volume lookup from DataForSEO",
+    )
+    parser.add_argument(
+        "--serp-sample",
+        type=int,
+        default=15,
+        help="Number of keywords for SERP analysis (default: 15)",
+    )
 
     args = parser.parse_args()
 
@@ -354,6 +411,9 @@ def main():
         enable_clustering=not args.no_clustering,
         min_score=args.min_score,
         cluster_count=args.clusters,
+        enable_serp_analysis=args.serp_analysis,
+        enable_volume_lookup=args.volume_lookup,
+        serp_sample_size=args.serp_sample,
     ))
 
     # Save output
