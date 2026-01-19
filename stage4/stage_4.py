@@ -79,7 +79,7 @@ async def run_stage_4(input_data: Stage4Input) -> Stage4Output:
         ]
         logger.info(f"  After word count filter: {len(keywords)} ({before - len(keywords)} removed)")
 
-    # Convert to ScoredKeyword objects (preserve source attribution)
+    # Convert to ScoredKeyword objects
     scored_keywords = [
         ScoredKeyword(
             keyword=kw.get("keyword", ""),
@@ -87,11 +87,6 @@ async def run_stage_4(input_data: Stage4Input) -> Stage4Output:
             score=kw.get("score", 0),
             source=kw.get("source", "ai_generated"),
             is_question=kw.get("is_question", False),
-            # Source attribution (from Stage 2 research)
-            source_url=kw.get("source_url"),
-            source_title=kw.get("source_title"),
-            source_quote=kw.get("source_quote"),
-            content_opportunity=kw.get("content_opportunity"),
         )
         for kw in keywords
     ]
@@ -149,7 +144,7 @@ async def _score_keywords(
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable required")
 
-    model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
     client = genai.Client(api_key=api_key)
 
     # Build company context for scoring

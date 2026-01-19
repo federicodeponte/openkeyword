@@ -64,7 +64,7 @@ async def run_stage_1(input_data: Stage1Input) -> Stage1Output:
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable required")
 
-    model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
     client = genai.Client(api_key=api_key)
 
     # Get current date for context

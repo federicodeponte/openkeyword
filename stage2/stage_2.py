@@ -74,7 +74,7 @@ async def run_stage_2(input_data: Stage2Input) -> Stage2Output:
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable required")
 
-    model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    model_name = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
     client = genai.Client(api_key=api_key)
 
     # Run research tasks in parallel
