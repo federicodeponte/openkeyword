@@ -55,6 +55,7 @@ secrets.json
 *.csv
 *.json
 !pyproject.toml
+!floom.json
 
 # OS
 .DS_Store
