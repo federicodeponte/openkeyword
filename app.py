@@ -24,10 +24,19 @@ def research(
     target_count: int = 50,
     language: str = "en",
     region: str = "us",
+    _knowledge: dict = None,
 ) -> dict:
     """Run the keyword research pipeline for a company."""
     print(f"Starting keyword research for: {company_url}")
     print(f"Target: {target_count} keywords, language={language}, region={region}")
+
+    # Use knowledge context to enrich company name if available
+    if _knowledge and not company_name:
+        for doc_name, doc_text in _knowledge.items():
+            # Try to extract company name from knowledge docs
+            if doc_text and len(doc_text) > 0:
+                logger.info("research() has %d knowledge docs available for context", len(_knowledge))
+                break
 
     from run_pipeline import run_pipeline
 

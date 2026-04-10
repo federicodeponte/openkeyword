@@ -6,17 +6,63 @@
     "research": {
       "label": "Research Keywords",
       "inputs": [
-        {"name": "company_url", "type": "url", "label": "Company Website URL", "required": true, "placeholder": "https://example.com"},
-        {"name": "company_name", "type": "text", "label": "Company Name", "required": false, "placeholder": "Auto-detected from URL if empty"},
-        {"name": "target_count", "type": "number", "label": "Target Keyword Count", "required": false, "default": 50},
-        {"name": "language", "type": "text", "label": "Language Code", "required": false, "default": "en"},
-        {"name": "region", "type": "text", "label": "Region Code", "required": false, "default": "us"}
+        {
+          "name": "company_url",
+          "type": "url",
+          "label": "Company Website URL",
+          "required": true,
+          "placeholder": "https://example.com"
+        },
+        {
+          "name": "company_name",
+          "type": "text",
+          "label": "Company Name",
+          "required": false,
+          "placeholder": "Auto-detected from URL if empty"
+        },
+        {
+          "name": "target_count",
+          "type": "number",
+          "label": "Target Keyword Count",
+          "required": false,
+          "default": 50
+        },
+        {
+          "name": "language",
+          "type": "text",
+          "label": "Language Code",
+          "required": false,
+          "default": "en"
+        },
+        {
+          "name": "region",
+          "type": "text",
+          "label": "Region Code",
+          "required": false,
+          "default": "us"
+        }
       ],
       "outputs": [
-        {"name": "summary", "type": "markdown", "label": "Research Summary"},
-        {"name": "keywords", "type": "table", "label": "Keywords"},
-        {"name": "clusters", "type": "json", "label": "Keyword Clusters"},
-        {"name": "full_results", "type": "json", "label": "Full Pipeline Results"}
+        {
+          "name": "summary",
+          "type": "markdown",
+          "label": "Research Summary"
+        },
+        {
+          "name": "keywords",
+          "type": "table",
+          "label": "Keywords"
+        },
+        {
+          "name": "clusters",
+          "type": "json",
+          "label": "Keyword Clusters"
+        },
+        {
+          "name": "full_results",
+          "type": "json",
+          "label": "Full Pipeline Results"
+        }
       ]
     }
   },
@@ -25,6 +71,9 @@
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0"
   ],
-  "secrets_needed": ["GEMINI_API_KEY"],
-  "manifest_version": "2.0"
+  "secrets_needed": [
+    "GEMINI_API_KEY"
+  ],
+  "manifest_version": "2.0",
+  "knowledge_enabled": true
 }
